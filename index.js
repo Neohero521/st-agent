@@ -464,12 +464,31 @@ function bindPanel(root) {
     regTools.addEventListener('change', () => { settings.registerChatTools = regTools.checked; saveSettings(); registerChatTools(); });
 }
 
+function buildMenuEntry() {
+    const menu = document.getElementById('extensionsMenu');
+    if (!menu) {
+        setTimeout(buildMenuEntry, 600);
+        return;
+    }
+    if (menu.querySelector('.sta-menu-item')) return;
+    const item = document.createElement('div');
+    item.className = 'list-group-item flex-container flexGap5 interactable sta-menu-item';
+    item.innerHTML = '<div class="fa-solid fa-wand-magic-sparkles extensionsMenuExtensionButton"></div><span>ST Agent</span>';
+    item.title = 'ST Agent · 在酒馆内自主执行的 Agent';
+    item.addEventListener('click', () => togglePanel(true));
+    menu.appendChild(item);
+    new MutationObserver(() => {
+        if (!menu.querySelector('.sta-menu-item')) buildMenuEntry();
+    }).observe(menu, { childList: true });
+}
+
 function togglePanel(open) {
     const { panel, root } = currentView;
     panel.classList.toggle('sta-open', open);
     root.classList.toggle('sta-panel-open', open);
     panel.setAttribute('aria-hidden', String(!open));
-    if (open) currentView.input.focus();
+    document.body.classList.toggle('sta-lock', open);
+    if (open && !matchMedia('(max-width: 720px)').matches) currentView.input.focus();
 }
 
 function setBusy(busy) {
@@ -652,10 +671,13 @@ function initialize() {
         mockGenerate: fn => { generateOverride = fn; },
         get settings() { return settings; },
         stop: () => abortController?.abort(),
+        open: () => togglePanel(true),
+        close: () => togglePanel(false),
     };
     if (!settings.enabled) return;
     if (document.querySelector('.sta-root')) return; // 幂等：避免重复加载时叠加面板
     buildPanel();
+    buildMenuEntry();
     populateProfiles();
     syncSettingsUI();
     refreshBridgeState().then(() => registerChatTools());
@@ -665,7 +687,7 @@ function initialize() {
     if (settingsHost) {
         const card = document.createElement('div');
         card.className = 'sta-settings-card';
-        card.innerHTML = '<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>ST Agent</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content"><p>右下角的「Agent」悬浮球可打开 Agent 面板。</p><p>扩展可单独使用：角色卡 / 世界书 / 聊天 / 设置 / 正则 / STscript。</p><p>任意磁盘读写与 shell 需额外安装可选插件 <code>st-agent-bridge</code>（config.yaml 设 <code>enableServerPlugins: true</code>）。</p></div></div>';
+        card.innerHTML = '<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>ST Agent</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content"><p>打开面板：桌面端点右下角「Agent」悬浮球；手机端点输入框上方的魔杖菜单 → ST Agent。</p><p>扩展可单独使用：角色卡 / 世界书 / 聊天 / 设置 / 正则 / STscript。</p><p>任意磁盘读写与 shell 需额外安装可选插件 <code>st-agent-bridge</code>（config.yaml 设 <code>enableServerPlugins: true</code>）。</p></div></div>';
         settingsHost.appendChild(card);
     }
 }
