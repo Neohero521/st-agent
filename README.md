@@ -77,7 +77,36 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 **预设与人格**：`preset.list` `preset.load` `persona.set`
 
 **和「酒馆助手」(JS-Slash-Runner) 协同**：`script.list` `script.set`
-检测到酒馆助手 4.x 时，可以直接列/建/改它的脚本树（`code` 传完整 JS）。这是“按意愿改造酒馆 UI 与行为”的通道；没装也不影响其它 53 个工具。
+检测到酒馆助手 4.x 时，可以直接列/建/改它的脚本树（`code` 传完整 JS）。这是“按意愿改造酒馆 UI 与行为”的通道；没装也不影响其它工具。
+
+## 自主性（v1.2）
+
+工具数 55 → 70。这一版的关键是让 Agent **不只在被点开时才工作**，而是能挂到酒馆的事件上自己动起来。
+
+**事件触发器（被动 → 主动）**：`event.on` `event.off` `event.list`
+
+```
+event.on {
+  event: "message_received",
+  match: "/决斗|战斗/",
+  task:  "每出现战斗描写，就检查当前角色卡有没有战斗属性，没有就补上"
+}
+```
+
+`match` 支持纯文本包含或 `/正则/` 写法；`task` 里可以用 `{text}` 引用命中内容。挂上之后，酒馆每收到一条消息，Agent 自己判断是否命中并跑一轮任务。触发器存在 `extension_settings['st-agent-triggers']`，刷新页面会自动重新挂载，`event.list` 的 `attached` 字段告诉你是否真的挂上了。可用事件就是酒馆自己的 `eventTypes`（`message_sent` / `message_received` / `character_message_rendered` / `generation_after_commands` / `chat_changed` / `group_chat_created` 等一百多种）。
+
+> 触发器会消耗 API 额度，`match` 建议写窄一点，别用空字符串挂 `message_received`。
+
+**叙事分支**：`chat.branch` `chat.rename`
+`chat.branch` 调用酒馆内部的 `branchChat(mesId)`，从某楼分叉出新聊天并自动切过去——和你手点「分叉」是同一个实现。`{ id: -1 }` 表示从最后一楼分叉。
+
+**人格**：`persona.list` `persona.desc` `persona.switch`
+列出人格（当前 `{user}` 是谁）、写描述并可设 `position` / `depth` / `role`（等于 UI 里的高级人格设置）、换人设。
+
+**群聊**：`group.list` `group.activate`
+列群聊与成员数，直接切进某个群聊，之后所有工具都作用于该群聊。
+
+**其它**：`token.count`（酒馆自己的分词器，和上下文预算同口径）、`macro.expand`（展开 `{{user}}` / `{{getvar::}}` / `{{time}}`，验证变量与宏是否真的生效）、`gen.info` / `gen.stop`、`lb.setGlobal`（`/world` 同款）。
 
 ## 可选增强：磁盘桥接
 
@@ -117,7 +146,7 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 酒馆开了 CSRF 保护时，扩展用的是酒馆自己的请求封装，正常不会触发；如果你手动改过 `request.js` 或用了反向代理改写，需要放行。
 
 **想确认装了几个工具**
-F12 执行 `STAgent.tools.length`：基础 55（含进阶层），装桥接是 64。
+F12 执行 `STAgent.tools.length`：基础 70（含进阶/自主层），装桥接是 79。
 
 ## 开发
 
