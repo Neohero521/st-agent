@@ -379,7 +379,7 @@ function buildPanel() {
             <div class="sta-approval" hidden>
                 <div class="sta-approval-text"></div>
                 <div class="sta-approval-actions">
-                    <button class="sta-btn ghost sta-deny">拒绝</button>
+                    <button class="sta-btn ghost sta-deny">取消</button>
                     <button class="sta-btn primary sta-allow">允许</button>
                 </div>
             </div>
