@@ -12,7 +12,7 @@
 https://github.com/Neohero521/st-agent
 ```
 
-仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `style.css` 均在根上），酒馆克隆后直接识别，不需要手动挑子目录。
+仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `style.css` 均在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
 
 **方式二：手动复制四个文件**
 
@@ -34,7 +34,7 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 .\install.ps1 -StDir "C:\SillyTavern"          # Windows
 ```
 
-装完在面板设置里选一个「模型配置」（就是酒馆连接管理器里已有的 API），然后直接下指令。
+装完直接下指令就行：面板**默认走你酒馆「API 连接」里配好的当前 API**（模型、密钥、代理都用现成的），不需要另外建连接配置。面板设置里的「模型来源」也支持选连接管理器里的某个 profile（想要独立模型/独立额度时用）。
 
 **怎么打开面板**：电脑端点右下角「Agent」悬浮球；手机 / 平板点输入框上方的魔杖菜单 → ST Agent（手机端悬浮球按设计隐藏，避免压住酒馆输入框）。
 
@@ -54,14 +54,6 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 **兜底**：`st.command` 直接执行任意 STscript（`/go` `/sys` `/world` `/trigger` …），等于拿到酒馆全部指令；`st.state` 读当前模型、上下文、角色、世界书等运行态。
 
 全部改动走酒馆自己的 `/api/*`，所以**酒馆内存缓存是同步的**——改完立刻生效，不用重启。
-
-## 能改到哪一层（“改造酒馆”的边界）
-
-分三层，只有第二、三层需要额外装桥接：
-
-1. **数据层（已内置，随口就改）**：角色卡、世界书、聊天、设置、预设、正则、STscript。改动直接落到酒馆文件，并同步内存缓存。
-2. **界面 / 代码层（需桥接）**：改主题 CSS、加悬浮窗 / 按钮、改前端逻辑、生成一个新扩展目录、甚至改酒馆源码。浏览器扩展无权写磁盘，必须靠 `fs.write` / `fs.edit`。桥接在线后是完整闭环：读源码 → 改 → `ui.reload` 或重启 → 自检。
-3. **进程层（需桥接）**：装依赖、重启酒馆、整包备份 `data/`。
 
 ## 可选增强：磁盘桥接
 
@@ -90,8 +82,12 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 **找不到入口 / 悬浮球没出现**
 手机上本来就不显示悬浮球，走魔杖菜单。电脑端没有球，先确认路径：必须是 `data/<用户名>/extensions/st-agent/`，且目录里直接能看到 `manifest.json` 与 `index.js`（不是再多一层 st-agent/）。放对后 F12 控制台应能看到 `STAgent`。
 
-**面板里没有模型配置**
-先去酒馆「连接管理器」建一个 API 配置，再回面板选。
+**面板报「酒馆当前 API 调用失败」**
+说明已经直连到酒馆当前 API，只是这个 API 回了业务错误。检查「API 连接」页：模型名是否存在、密钥是否有效、代理地址是否可达。常见如 `No Horde model available` = Kobold Horde 没可用模型；`401` = 密钥失效。
+如果你想让面板用**另一套**模型（不动酒馆主 API），在「连接管理器」建 profile，再回面板「模型来源」里选它。
+
+**回复不是逐字流式**
+默认直连模式走酒馆的 raw 生成，等整段返回后一次显示（面板顶部会提示「生成中」）。需要逐字流式就选连接管理器 profile。
 
 **工具报 403 / CSRF**
 酒馆开了 CSRF 保护时，扩展用的是酒馆自己的请求封装，正常不会触发；如果你手动改过 `request.js` 或用了反向代理改写，需要放行。
@@ -106,7 +102,6 @@ STAgent.tools                              // 当前可用工具（随桥接状�
 STAgent.executeTool({name:'world.list', args:{}})
 STAgent.mockGenerate(fn)                   // 用自定义函数代替模型，离线调试循环
 STAgent.run('列出所有世界书')
-STAgent.open() / STAgent.close()            // 开 / 关面板
 ```
 
 加工具：`tools.js` 里 `ST_TOOLS`（酒馆内）或 `BRIDGE_TOOLS`（需桥接）各加一项 `{name, kind, desc, params, run}`，系统提示会自动带上；需要新的服务端能力就在 `st-agent-bridge/index.js` 加路由。
@@ -115,5 +110,6 @@ STAgent.open() / STAgent.close()            // 开 / 关面板
 
 - 角色卡 `world`（绑定世界书）字段酒馆的 `edit-attribute` 接口不认，暂不支持写入，走 UI 或 STscript
 - 同一时间只跑一个任务，没有多会话隔离
+- 默认直连模式下请求由酒馆内部管理，「停止」只能阻止下一步，正在跑的这次生成要等它返回
 - 桥接的 `exec` 是给高级用户开的口子，默认建议只开读写
 - 从 URL 安装后目录里会多出 `install.sh`、`README.md`、`st-agent-bridge/` 等文件，它们不参与运行；后续 `git pull` 可原地升级扩展本体
