@@ -81,7 +81,7 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 
 ## 自主性（v1.2）
 
-工具数 55 → 70。这一版的关键是让 Agent **不只在被点开时才工作**，而是能挂到酒馆的事件上自己动起来。
+工具数 55 → 70（v1.2）。这一版的关键是让 Agent **不只在被点开时才工作**，而是能挂到酒馆的事件上自己动起来。
 
 **事件触发器（被动 → 主动）**：`event.on` `event.off` `event.list`
 
@@ -107,6 +107,32 @@ event.on {
 列群聊与成员数，直接切进某个群聊，之后所有工具都作用于该群聊。
 
 **其它**：`token.count`（酒馆自己的分词器，和上下文预算同口径）、`macro.expand`（展开 `{{user}}` / `{{getvar::}}` / `{{time}}`，验证变量与宏是否真的生效）、`gen.info` / `gen.stop`、`lb.setGlobal`（`/world` 同款）。
+
+## 自动化与检索（v1.3）
+
+工具数 70 → 80。这一层把酒馆的「快速回复」变成了 Agent 的按钮工厂。
+
+**快速回复 = 给酒馆装按钮**：`qr.sets` `qr.list` `qr.createSet` `qr.add` `qr.delete` `qr.run`
+
+```
+qr.createSet { name: "剧情辅助", mount: "global" }
+qr.add {
+  set: "剧情辅助", label: "回看主线",
+  message: "/summarize 主线",
+  on: { ai: true }        // AI 每次回复后自动执行
+}
+```
+
+`qr.add` 支持 `icon` / `show_label` / `automation_id`，以及 `on` 里的一整套原生钩子：`startup` / `user` / `ai` / `chat_change` / `new_chat` / `before_generation`。这些钩子由酒馆的快速回复引擎调度，比外部事件监听更贴近原生行为。`qr.run` 可以立即执行某个按钮并拿到 STscript 的管道结果。写操作会自动存盘，刷新页面按钮还在（实测过）。
+
+**跨库全文检索**：`chat.searchAll`
+走 `/api/chats/search`，在角色（或群聊）的**所有**聊天文件里搜关键词，返回命中的文件与楼层——找哪一档聊天里提过某个设定，终于不用一个个点开。
+
+**独立生成**：`gen.raw`
+用酒馆当前 API 跑一次不进聊天的生成（可带 system 与长度）。适合让 Agent 悄悄向模型问一句话、做二次判断，不污染对话。
+
+**采样器**：`sampler.get` `sampler.set`
+读写 `temperature` / `top_p` / `top_k` / penalties / `max_tokens`，写完立即存盘。
 
 ## 可选增强：磁盘桥接
 
@@ -146,7 +172,7 @@ event.on {
 酒馆开了 CSRF 保护时，扩展用的是酒馆自己的请求封装，正常不会触发；如果你手动改过 `request.js` 或用了反向代理改写，需要放行。
 
 **想确认装了几个工具**
-F12 执行 `STAgent.tools.length`：基础 70（含进阶/自主层），装桥接是 79。
+F12 执行 `STAgent.tools.length`：基础 80（含进阶/自主/自动化层），装桥接是 89。
 
 ## 开发
 
