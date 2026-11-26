@@ -60,4 +60,4 @@ fi
 
 echo ""
 echo "完成。刷新酒馆页面，右下角出现「Agent」悬浮球。"
-echo "自检：F12 控制台执行 STAgent.tools.length（无桥接 55，有桥接 64）"
+echo "自检：F12 控制台执行 STAgent.tools.length（无桥接 70，有桥接 79）"
