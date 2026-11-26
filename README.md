@@ -12,17 +12,17 @@
 https://github.com/Neohero521/st-agent
 ```
 
-仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `adv-tools.js` / `style.css` 均在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
+仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `adv-tools.js` / `adv-tools-v14.js` / `style.css` 均在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
 
 **方式二：手动复制文件**
 
-把仓库根目录的 `manifest.json`、`index.js`、`tools.js`、`adv-tools.js`、`style.css` 放进
+把仓库根目录的 `manifest.json`、`index.js`、`tools.js`、`adv-tools.js`、`adv-tools-v14.js`、`style.css` 放进
 
 ```
 <酒馆根目录>/data/<你的用户名>/extensions/st-agent/
 ```
 
-没有目录就自己建。`tools.js` / `adv-tools.js` 必须一起放（被 `index.js` import）。刷新页面即可。
+没有目录就自己建。`tools.js` / `adv-tools.js` 必须一起放（被 `index.js` import）；`adv-tools-v14.js` 可选，缺了只是少 13 个工具，不会报错。刷新页面即可。
 
 **方式三：一条命令（本目录 / zip 版）**
 
@@ -81,7 +81,7 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 
 ## 自主性（v1.2）
 
-工具数 55 → 70（v1.2）。这一版的关键是让 Agent **不只在被点开时才工作**，而是能挂到酒馆的事件上自己动起来。
+工具数 55 → 70。这一版的关键是让 Agent **不只在被点开时才工作**，而是能挂到酒馆的事件上自己动起来。
 
 **事件触发器（被动 → 主动）**：`event.on` `event.off` `event.list`
 
@@ -134,6 +134,42 @@ qr.add {
 **采样器**：`sampler.get` `sampler.set`
 读写 `temperature` / `top_p` / `top_k` / penalties / `max_tokens`，写完立即存盘。
 
+## 角色卡深改与资产（v1.4）
+
+工具数 80 → 93。这一层解决的是酒馆 UI 里最费手的几件事。
+
+**角色卡深度合并（重点）**：`char.merge` `char.bulkMerge`
+
+走 `/api/characters/merge-attributes`——**深度合并 + V2 校验 + `__@@UNSET@@__` 哨兵删字段**。所以它能写 `edit-attribute` 写不进去的字段，尤其是 `data.extensions.world`（角色卡绑定世界书）、`depth_prompt`，以及任意自定义 extensions 键。
+
+```
+char.merge { avatar: "Seraphina.png", fields: { data: { extensions: { world: "Eldoria" } } } }
+char.merge { avatar: "Seraphina.png", unset: ["data.extensions.world"] }   // 删字段
+char.bulkMerge { avatars: [], fields: { data: { extensions: { talkativeness: "0.5" } } } }
+```
+
+`char.bulkMerge` 的 `avatars` 传空数组 = 作用于目录下**全部**角色卡，还能用 `filterPath` 先筛（例如只改已经绑过世界书的卡）。批量补字段这是唯一正路，逐张走 `edit-attribute` 会慢到不可用。
+
+**角色卡导出与复制**：`char.exportJson` `char.duplicate`
+
+`char.exportJson` 拿回 V2 JSON（含内嵌 `character_book` 条数与 extensions 键名清单），核对内嵌世界书、检查绑定关系都靠它。
+
+**任意聊天文件直读**：`char.chats` `chat.readFile`
+
+`char.chats` 列某张卡下所有聊天档（楼层数 + 最后一条预览）；`chat.readFile` 走 `/api/chats/export` 的 jsonl 短路径，把**任意一档**聊天读成楼层数组——不用先切过去、也不用打开它。Agent 第一次能遍历磁盘上的所有聊天档。
+
+**聊天生命周期**：`chat.new` `chat.close`
+
+**背景与主题**：`bg.list` `bg.set` `bg.delete` `theme.list`
+
+`bg.set` 支持部分名匹配（写 `bedroom red` 就命中 `bedroom red.jpg`）。
+
+**触发器预演**：`event.test`
+
+挂 `event.on` 之前先拿一段模拟消息跑一遍，看哪些触发器会命中、会跑什么任务。`match` 写错导致每楼都触发、白烧额度的事，用这个先拦住。
+
+**架构改动（值得知道）**：`tools.js` 末尾加了**探针式加载器**——新工具模块按 `adv-tools-vN` 命名丢进扩展目录就会自动挂进 `ADV_TOOLS`，不必再改 `tools.js` / `adv-tools.js` / `index.js`。v1.4 的 13 个工具都在 `adv-tools-v14.js` 里，是这个机制的第一次使用；以后每版只需新增一个小文件。
+
 ## 可选增强：磁盘桥接
 
 上面这些已经覆盖「酒馆内部文件」的全部 CRUD。如果你还想要**任意路径读写、grep 整个装包、跑 shell 命令**，再装 `st-agent-bridge`（服务端插件）：
@@ -148,7 +184,7 @@ qr.add {
 
 ## 怎么用
 
-- 直接说人话：「把 Eldoria 里所有 constant 条目按 insertion_order 重排」「找出提到旧角色名的聊天，列出来」「清掉正则里没启用的条目」「把这章的 MVU 变量按楼层补齐」
+- 直接说人话：「把 Eldoria 里所有 constant 条目按 insertion_order 重排」「找出提到旧角色名的聊天，列出来」「给所有角色卡绑同一个世界书」「把某一档不打开的聊天按楼层列出来」
 - 面板按 `你 → 计划 → 工具调用（可展开看原始结果）→ 结论` 流式展示
 - 审批三档：仅高危 / 写操作 / 每步确认（设置里切）
 - 步数上限默认 20，随时「停止」
@@ -172,7 +208,7 @@ qr.add {
 酒馆开了 CSRF 保护时，扩展用的是酒馆自己的请求封装，正常不会触发；如果你手动改过 `request.js` 或用了反向代理改写，需要放行。
 
 **想确认装了几个工具**
-F12 执行 `STAgent.tools.length`：基础 80（含进阶/自主/自动化层），装桥接是 89。
+F12 执行 `STAgent.tools.length`：基础 93（进阶/自主/自动化/深改四层），装桥接是 102。
 
 ## 开发
 
@@ -183,12 +219,19 @@ STAgent.mockGenerate(fn)                   // 用自定义函数代替模型，�
 STAgent.run('列出所有世界书')
 ```
 
-加工具：`tools.js` 里的 `ST_TOOLS`（酒馆内）或 `BRIDGE_TOOLS`（需桥接），以及 `adv-tools.js` 里的 `ADV_TOOLS`，各加一项 `{name, kind, desc, params, run}`，系统提示会自动带上；需要新的服务端能力就在 `st-agent-bridge/index.js` 加路由。
+加工具三种方式：
+
+1. **新开一个 `adv-tools-vN.js`，导出 `TOOLS` 数组**（推荐，不用改任何现有文件；v14 / v15 / … v19 都已被探针预置）
+2. `adv-tools.js` 里的 `ADV_TOOLS` 直接加一项
+3. `tools.js` 里的 `ST_TOOLS`（酒馆内）或 `BRIDGE_TOOLS`（需桥接）
+
+每项都是 `{name, kind, desc, params, run}`，系统提示会自动带上。需要新的服务端能力就在 `st-agent-bridge/index.js` 加路由。
 
 ## 已知限制
 
-- 角色卡 `world`（绑定世界书）字段酒馆的 `edit-attribute` 接口不认，暂不支持写入，走 `world.get` + UI 或 STscript
+- 角色卡上 `edit-attribute` 不认的字段（如 `world` 绑定世界书）用 `char.merge` 写，v1.4 起已支持；V2 校验不通过时接口会 400，工具会把原因带回来
 - 同一时间只跑一个任务，没有多会话隔离
 - 默认直连模式下请求由酒馆内部管理，「停止」只能阻止下一步，正在跑的这次生成要等它返回
+- `theme.list` 只能读主题名，切换主题仍要改 `powerUserSettings.theme` 并刷新（酒馆没暴露 `applyTheme`）
 - 桥接的 `exec` 是给高级用户开的口子，默认建议只开读写
 - 从 URL 安装后目录里会多出 `install.sh`、`README.md`、`st-agent-bridge/` 等文件，它们不参与运行；后续 `git pull` 可原地升级扩展本体
