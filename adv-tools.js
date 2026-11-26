@@ -745,6 +745,176 @@ async function setGlobalBook({ name } = {}) {
     return { ok: true, global_book: name, result: r?.pipe ?? null };
 }
 
+/* ------------------------------ v1.3：快速回复 / 全库检索 / 独立生成 / 采样器 ------------------------------ */
+
+function qrApi() {
+    const api = globalThis.quickReplyApi;
+    if (!api) throw new Error('没找到 quickReplyApi（酒馆「快速回复」扩展未启用）');
+    return api;
+}
+
+function persistQuickReplies() {
+    try {
+        const api = qrApi();
+        api.settings?.save?.();
+        c().saveSettingsDebounced?.();
+    } catch { /* ignore */ }
+}
+
+function qrSets() {
+    const api = qrApi();
+    return {
+        sets: api.listSets(),
+        global_mounted: api.listGlobalSets(),
+        chat_mounted: api.listChatSets(),
+        automation_ids: api.listAutomationIds?.() || [],
+    };
+}
+
+function qrList({ set } = {}) {
+    const api = qrApi();
+    if (!set) throw new Error('需要 set 名（先用 qr.sets 查）');
+    const obj = api.getSetByName?.(set);
+    const labels = new Set([
+        ...(obj?.qrList || []).map(q => q.label),
+        ...(api.listQuickReplies?.(set) || []),
+    ]);
+    const list = [...labels].map(label => {
+        const qr = api.getQrByLabel?.(set, label) || (obj?.qrList || []).find(q => q.label === label);
+        return {
+            label,
+            message: (qr?.message || '').slice(0, 200),
+            icon: qr?.icon || '',
+            hidden: !!qr?.isHidden,
+            automation_id: qr?.automationId || '',
+            on: {
+                startup: !!qr?.executeOnStartup, user: !!qr?.executeOnUser, ai: !!qr?.executeOnAi,
+                chat_change: !!qr?.executeOnChatChange, new_chat: !!qr?.executeOnNewChat,
+                before_generation: !!qr?.executeBeforeGeneration,
+            },
+        };
+    });
+    const mounted = [...(api.listGlobalSets?.() || []), ...(api.listChatSets?.() || [])].includes(set);
+    return { set, mounted, count: list.length, replies: list };
+}
+
+function qrCreateSet({ name, mount = 'global' } = {}) {
+    if (!name) throw new Error('需要组名');
+    const api = qrApi();
+    const existing = api.listSets();
+    if (existing.includes(name)) throw new Error(`已存在同名组：${name}`);
+    api.createSet(name);
+    if (mount === 'global') api.addGlobalSet(name);
+    else if (mount === 'chat') api.addChatSet(name);
+    persistQuickReplies();
+    return { ok: true, set: name, mounted: mount };
+}
+
+function qrAdd({ set, label, message, icon = '', show_label = false, hidden = false, automation_id = '', on } = {}) {
+    if (!set || !label) throw new Error('需要 set 与 label');
+    if (!message) throw new Error('需要 message（按钮执行的 STscript 或文本）');
+    const api = qrApi();
+    if (!api.listSets().includes(set)) throw new Error(`没有名为「${set}」的组，先用 qr.createSet 建`);
+    if (api.listQuickReplies(set).includes(label)) throw new Error(`组「${set}」里已有按钮「${label}」`);
+    const o = on || {};
+    const qr = api.createQuickReply(set, label, {
+        message,
+        icon,
+        showLabel: !!show_label,
+        isHidden: !!hidden,
+        automationId: automation_id || '',
+        executeOnStartup: !!o.startup,
+        executeOnUser: !!o.user,
+        executeOnAi: !!o.ai,
+        executeOnChatChange: !!o.chat_change,
+        executeOnNewChat: !!o.new_chat,
+        executeBeforeGeneration: !!o.before_generation,
+    });
+    persistQuickReplies();
+    return { ok: true, set, label: qr?.label ?? label, automation_id: qr?.automationId || '' };
+}
+
+function qrDelete({ set, label } = {}) {
+    if (!set || !label) throw new Error('需要 set 与 label');
+    const api = qrApi();
+    api.deleteQuickReply(set, label);
+    persistQuickReplies();
+    return { ok: true, set, label, deleted: true };
+}
+
+async function qrRun({ set, label, args = {} } = {}) {
+    if (!set || !label) throw new Error('需要 set 与 label');
+    const api = qrApi();
+    const result = await api.executeQuickReply(set, label, args);
+    return { ok: true, set, label, result: typeof result === 'string' ? result.slice(0, 2000) : (result?.pipe ?? null) };
+}
+
+async function searchAllChats({ query, group } = {}) {
+    if (!query) throw new Error('需要 query');
+    const c0 = c();
+    const body = { query: String(query) };
+    if (group) body.group_id = group;
+    else {
+        const avatar = c0.characters?.[c0.characterId]?.avatar;
+        if (!avatar) throw new Error('当前没有选中角色，传 group 或先选角色再搜');
+        body.avatar_url = avatar;
+    }
+    const res = await fetch('/api/chats/search', {
+        method: 'POST',
+        headers: { ...c0.getRequestHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`搜索失败：HTTP ${res.status}`);
+    const data = await res.json();
+    const list = Array.isArray(data) ? data : [];
+    return { query, count: list.length, hits: list.slice(0, 30) };
+}
+
+async function genRaw({ prompt, system = '', length } = {}) {
+    if (!prompt) throw new Error('需要 prompt');
+    const mod = await getScriptModule();
+    if (!mod?.generateRaw) throw new Error('当前版本未暴露 generateRaw');
+    const text = await mod.generateRaw({
+        prompt: String(prompt),
+        systemPrompt: String(system || ''),
+        ...(length ? { responseLength: Number(length) } : {}),
+    });
+    return { ok: true, chars: (text || '').length, text: String(text || '').slice(0, 4000) };
+}
+
+const SAMPLER_KEYS = ['temperature', 'top_p', 'top_k', 'frequency_penalty', 'presence_penalty', 'repetition_penalty', 'openai_max_tokens', 'max_tokens'];
+
+function samplerStore() {
+    const s = c().chatCompletionSettings || c().textCompletionSettings;
+    if (!s) throw new Error('当前版本没有采样设置对象');
+    return s;
+}
+
+function samplerGet() {
+    const a = c().chatCompletionSettings || {};
+    const b = c().textCompletionSettings || {};
+    const out = {};
+    for (const k of SAMPLER_KEYS) {
+        if (a[k] !== undefined && a[k] !== null) out[k] = a[k];
+        else if (b[k] !== undefined && b[k] !== null) out[k] = b[k];
+    }
+    return { api: c().mainApi, settings: out };
+}
+
+function samplerSet({ values, ...rest } = {}) {
+    const s = samplerStore();
+    const patch = values && typeof values === 'object' ? values : rest;
+    const applied = {};
+    for (const [k, v] of Object.entries(patch || {})) {
+        if (!SAMPLER_KEYS.includes(k)) continue;
+        s[k] = Number(v);
+        applied[k] = s[k];
+    }
+    if (!Object.keys(applied).length) throw new Error(`没有可设置的字段，可用：${SAMPLER_KEYS.join(' / ')}`);
+    c().saveSettingsDebounced?.();
+    return { ok: true, applied };
+}
+
 /* ------------------------------ 工具清单 ------------------------------ */
 
 export const ADV_TOOLS = [
@@ -970,6 +1140,67 @@ export const ADV_TOOLS = [
         desc: '把某本世界书设为全局激活（等同 /world 命令）。',
         params: { name: '世界书名' },
         run: a => setGlobalBook(a),
+    },
+    /* ---------- v1.3 ---------- */
+    {
+        name: 'qr.sets', kind: 'read',
+        desc: '列出「快速回复」的所有组、哪些挂成了全局/聊天、以及所有 automationId（酒馆原生自动化钩子）。',
+        params: {},
+        run: () => qrSets(),
+    },
+    {
+        name: 'qr.list', kind: 'read',
+        desc: '列出某个快速回复组里的按钮，含它执行的 message 和自动触发钩子。',
+        params: { set: '组名' },
+        run: a => qrList(a),
+    },
+    {
+        name: 'qr.createSet', kind: 'write',
+        desc: '新建一个快速回复组并可立即挂上（global 全局 / chat 当前聊天）。',
+        params: { name: '组名', mount: 'global|chat|none' },
+        run: a => qrCreateSet(a),
+    },
+    {
+        name: 'qr.add', kind: 'write',
+        desc: '往组里加一个按钮。message 是 STscript（如 /echo hi 或 /setvar key=x）。on.* 可让它在 AI 回复后/生成前自动执行，automation_id 可被 /automation 触发。',
+        params: { set: '组名', label: '按钮名', message: 'STscript', icon: '图标', show_label: '显示文字', automation_id: '自动化 id', on: '{ai,user,startup,new_chat,before_generation…}' },
+        run: a => qrAdd(a),
+    },
+    {
+        name: 'qr.delete', kind: 'write',
+        desc: '删除组里的某个按钮。',
+        params: { set: '组名', label: '按钮名' },
+        run: a => qrDelete(a),
+    },
+    {
+        name: 'qr.run', kind: 'write',
+        desc: '立即执行某个按钮（等于手点它），返回 STscript 管道结果。',
+        params: { set: '组名', label: '按钮名', args: '传给 STscript 的参数对象' },
+        run: a => qrRun(a),
+    },
+    {
+        name: 'chat.searchAll', kind: 'read',
+        desc: '在角色（或群聊）的所有聊天文件里做全文搜索，返回命中的聊天文件与楼层。比只搜当前聊天有用得多。',
+        params: { query: '关键词', group: '群 id（可选）' },
+        run: a => searchAllChats(a),
+    },
+    {
+        name: 'gen.raw', kind: 'write',
+        desc: '用酒馆当前 API 跑一次独立生成，结果不进聊天（相当于「问另一个模型一句话」，可指定 system 与长度）。',
+        params: { prompt: '用户侧文本', system: '系统提示（可选）', length: '最大输出 token' },
+        run: a => genRaw(a),
+    },
+    {
+        name: 'sampler.get', kind: 'read',
+        desc: '读当前采样参数（temperature / top_p / penalties / max_tokens 等）。',
+        params: {},
+        run: () => samplerGet(),
+    },
+    {
+        name: 'sampler.set', kind: 'write',
+        desc: '改采样参数（只改传入的字段，其余不动），写完立即存盘。',
+        params: { values: '{temperature:0.8, top_p:0.9, …}' },
+        run: a => samplerSet(a),
     },
 ];
 
