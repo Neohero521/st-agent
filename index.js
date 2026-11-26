@@ -63,6 +63,62 @@ function getProfiles() {
     }
 }
 
+/* ------------------------------ 直连酒馆当前 API ------------------------------ */
+
+let generateRawFn;
+
+async function getGenerateRaw() {
+    if (generateRawFn !== undefined) return generateRawFn;
+    // script.js 在 public/ 下（扩展目录往上四级）；不同版本布局可能不同，所以逐个试
+    for (const path of ['../../../../script.js', '../../../script.js']) {
+        try {
+            const mod = await import(path);
+            if (typeof mod.generateRaw === 'function') {
+                generateRawFn = mod.generateRaw;
+                return generateRawFn;
+            }
+        } catch { /* try next */ }
+    }
+    generateRawFn = null;
+    return generateRawFn;
+}
+
+function serializeHistory(list) {
+    const lines = [];
+    for (const m of list) {
+        if (m.role === 'system') continue;
+        lines.push((m.role === 'assistant' ? '### 助手\n' : '### 用户\n') + String(m.content ?? ''));
+    }
+    return lines.join('\n\n') + '\n\n### 助手\n';
+}
+
+async function rawGenerate(list, onChunk) {
+    const fn = await getGenerateRaw();
+    if (!fn) {
+        throw new Error('当前酒馆版本没有暴露 generateRaw，无法直连 API；请在酒馆「连接管理器」里建一个配置');
+    }
+    const system = list.find(m => m.role === 'system')?.content ?? '';
+    const messages = list.filter(m => m.role !== 'system')
+        .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content ?? '') }));
+    onChunk?.('（酒馆当前 API 生成中…长任务可能要等一会儿）');
+    let reply;
+    try {
+        // 优先按 chat 消息数组传，保留角色结构
+        reply = await fn({ prompt: messages, systemPrompt: system, responseLength: settings.maxTokens });
+    } catch (error) {
+        if (abortController?.signal?.aborted) throw error;
+        try {
+            // 兼容只吃字符串的旧版本
+            reply = await fn({ prompt: serializeHistory(list), systemPrompt: system, responseLength: settings.maxTokens });
+        } catch (second) {
+            throw new Error(`酒馆当前 API 调用失败：${second?.message || error?.message || '未知错误'}。请检查酒馆「API 连接」页的模型与密钥。`);
+        }
+    }
+    const text = typeof reply === 'string' ? reply : (reply?.content || '');
+    onChunk?.(text);
+    return text;
+}
+
 /* ------------------------------ 系统提示 ------------------------------ */
 
 async function buildSystemPrompt() {
@@ -221,8 +277,11 @@ async function stepGenerate(list, onChunk) {
         return text;
     }
     const svc = ctx().ConnectionManagerRequestService;
-    const profileId = settings.profileId || getProfiles()[0]?.id;
-    if (!profileId) throw new Error('没有可用的连接配置，请先在「连接管理器」里新建一个 API 配置');
+    const profileId = settings.profileId;
+    // 默认（未选连接配置）→ 直接用酒馆「API 连接」里配置的当前 API
+    if (!profileId || !svc) {
+        return rawGenerate(list, onChunk);
+    }
     const request = await svc.sendRequest(profileId, list, settings.maxTokens, {
         stream: true,
         extractData: true,
@@ -396,7 +455,7 @@ function buildPanel() {
                     <button class="sta-icon-btn sta-drawer-close">✕</button>
                 </div>
                 <label class="sta-field">
-                    <span>模型配置</span>
+                    <span>模型来源</span>
                     <select class="sta-profile"></select>
                 </label>
                 <label class="sta-field">
@@ -415,7 +474,7 @@ function buildPanel() {
                     <span>聊天内注册工具</span>
                     <input class="sta-register-tools" type="checkbox" />
                 </label>
-                <div class="sta-hint">能力：<span class="sta-bridge-state">检测中…</span></div>
+                <div class="sta-hint">模型：默认用酒馆「API 连接」里的当前配置，不需要另建连接。<br>能力：<span class="sta-bridge-state">检测中…</span></div>
             </div>
         </section>
     `;
@@ -579,10 +638,6 @@ function submitTask() {
     if (running) return;
     const text = currentView.input.value.trim();
     if (!text) return;
-    if (!generateOverride && !settings.profileId && getProfiles().length === 0) {
-        addLog('error', '还没有可用的连接配置。先到「连接管理器」里新建一个 API 配置，再回来选择模型。');
-        return;
-    }
     currentView.input.value = '';
     currentView.input.style.height = 'auto';
     runAgent(text);
@@ -593,19 +648,30 @@ function populateProfiles() {
     const list = getProfiles();
     const sel = currentView.profileSel;
     sel.innerHTML = '';
-    if (!list.length) {
-        sel.innerHTML = '<option value="">（未检测到连接配置）</option>';
-        return;
-    }
+    // 第一项永远是「当前酒馆 API」：直接用「API 连接」里配置的模型与密钥
+    const current = document.createElement('option');
+    current.value = "";
+    const apiLabel = (() => {
+        try {
+            const oai = ctx().oai_settings || {};
+            const model = oai.chat_completion_source === 'openai' ? oai.openai_model : (oai.oai_settings?.custom_model || '酒馆主 API');
+            return `当前酒馆 API${model ? '（' + model + '）' : ''}`;
+        } catch {
+            return '当前酒馆 API';
+        }
+    })();
+    current.textContent = apiLabel;
+    sel.appendChild(current);
+
     for (const p of list) {
         const option = document.createElement('option');
         option.value = p.id;
         option.textContent = `${p.name || p.model || p.id}${p.model ? ' · ' + p.model : ''}`;
         sel.appendChild(option);
     }
-    const saved = settings.profileId && list.some(p => p.id === settings.profileId) ? settings.profileId : list[0].id;
-    sel.value = saved;
-    settings.profileId = saved;
+    const valid = settings.profileId && list.some(p => p.id === settings.profileId);
+    sel.value = valid ? settings.profileId : '';
+    settings.profileId = sel.value;
 }
 
 function syncSettingsUI() {
@@ -687,7 +753,7 @@ function initialize() {
     if (settingsHost) {
         const card = document.createElement('div');
         card.className = 'sta-settings-card';
-        card.innerHTML = '<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>ST Agent</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content"><p>打开面板：桌面端点右下角「Agent」悬浮球；手机端点输入框上方的魔杖菜单 → ST Agent。</p><p>扩展可单独使用：角色卡 / 世界书 / 聊天 / 设置 / 正则 / STscript。</p><p>任意磁盘读写与 shell 需额外安装可选插件 <code>st-agent-bridge</code>（config.yaml 设 <code>enableServerPlugins: true</code>）。</p></div></div>';
+        card.innerHTML = '<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>ST Agent</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content"><p>打开面板：桌面端点右下角「Agent」悬浮球；手机端点输入框上方的魔杖菜单 → ST Agent。</p><p>模型默认用酒馆「API 连接」里配的当前 API，不需要另建连接配置。</p><p>任意磁盘读写与 shell 需额外安装可选插件 <code>st-agent-bridge</code>（config.yaml 设 <code>enableServerPlugins: true</code>）。</p></div></div>';
         settingsHost.appendChild(card);
     }
 }
