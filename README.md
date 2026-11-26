@@ -24,6 +24,15 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 
 装完在面板设置里选一个「模型配置」（就是酒馆连接管理器里已有的 API），然后直接下指令。
 
+想从 GitHub 拉取也可以：
+
+```bash
+git clone https://github.com/Neohero521/st-agent.git /tmp/st-agent
+cp -r /tmp/st-agent/st-agent "<酒馆根目录>/data/<用户名>/extensions/"
+```
+
+（酒馆自带的「从 URL 安装扩展」只扫描一层目录，本仓库内含扩展 + 可选桥接两个目录，所以手动复制 `st-agent` 子目录最稳妥。）
+
 ## 它能做什么
 
 **角色卡**：`char.list` `char.get` `char.create` `char.edit` `char.rename` `char.delete`
