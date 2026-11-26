@@ -1,9 +1,9 @@
 {
     "display_name": "ST Agent",
     "name": "st-agent",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "author": "Neohero521",
-    "description": "在酒馆内部运行的自主 Agent：自主规划、多轮调用工具，增删改查角色卡/世界书/聊天记录/设置/正则，并可直接执行 STscript。纯扩展安装，不需要改服务端。",
+    "description": "在酒馆内部运行的自主 Agent：自主规划、多轮调用 55 个工具，增删改查角色卡 / 世界书 / 聊天楼层 / MVU 变量 / 设置 / 正则，可注入提示词、执行 STscript；装了「酒馆助手」还能改脚本树。纯扩展安装，不改服务端。",
     "loading_order": 100,
     "js": "index.js",
     "css": "style.css",
