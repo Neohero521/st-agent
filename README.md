@@ -12,7 +12,7 @@
 https://github.com/Neohero521/st-agent
 ```
 
-仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `style.css` 均在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
+仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `style.css` 均在根上），酒馆克隆后直接识别，不需要手动挑子目录。
 
 **方式二：手动复制四个文件**
 
@@ -36,6 +36,8 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 
 装完在面板设置里选一个「模型配置」（就是酒馆连接管理器里已有的 API），然后直接下指令。
 
+**怎么打开面板**：电脑端点右下角「Agent」悬浮球；手机 / 平板点输入框上方的魔杖菜单 → ST Agent（手机端悬浮球按设计隐藏，避免压住酒馆输入框）。
+
 ## 它能做什么
 
 **角色卡**：`char.list` `char.get` `char.create` `char.edit` `char.rename` `char.delete`
@@ -52,6 +54,14 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 **兜底**：`st.command` 直接执行任意 STscript（`/go` `/sys` `/world` `/trigger` …），等于拿到酒馆全部指令；`st.state` 读当前模型、上下文、角色、世界书等运行态。
 
 全部改动走酒馆自己的 `/api/*`，所以**酒馆内存缓存是同步的**——改完立刻生效，不用重启。
+
+## 能改到哪一层（“改造酒馆”的边界）
+
+分三层，只有第二、三层需要额外装桥接：
+
+1. **数据层（已内置，随口就改）**：角色卡、世界书、聊天、设置、预设、正则、STscript。改动直接落到酒馆文件，并同步内存缓存。
+2. **界面 / 代码层（需桥接）**：改主题 CSS、加悬浮窗 / 按钮、改前端逻辑、生成一个新扩展目录、甚至改酒馆源码。浏览器扩展无权写磁盘，必须靠 `fs.write` / `fs.edit`。桥接在线后是完整闭环：读源码 → 改 → `ui.reload` 或重启 → 自检。
+3. **进程层（需桥接）**：装依赖、重启酒馆、整包备份 `data/`。
 
 ## 可选增强：磁盘桥接
 
@@ -77,8 +87,8 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 **从 URL 安装报 500**
 酒馆的安装接口只读“克隆目录根”的 `manifest.json`，根上没有就一律 500。如今仓库根已经有了；如果仍报 500，看酒馆服务端日志，基本是主机没装 `git` 或到 GitHub 的网络不通（此时改用手动复制）。
 
-**悬浮球没出现**
-路径放错了。必须是 `data/<用户名>/extensions/st-agent/`，且目录里直接能看到 `manifest.json` 与 `index.js`（不是再多一层 st-agent/）。放对后 F12 控制台应能看到 `STAgent`。
+**找不到入口 / 悬浮球没出现**
+手机上本来就不显示悬浮球，走魔杖菜单。电脑端没有球，先确认路径：必须是 `data/<用户名>/extensions/st-agent/`，且目录里直接能看到 `manifest.json` 与 `index.js`（不是再多一层 st-agent/）。放对后 F12 控制台应能看到 `STAgent`。
 
 **面板里没有模型配置**
 先去酒馆「连接管理器」建一个 API 配置，再回面板选。
@@ -96,6 +106,7 @@ STAgent.tools                              // 当前可用工具（随桥接状�
 STAgent.executeTool({name:'world.list', args:{}})
 STAgent.mockGenerate(fn)                   // 用自定义函数代替模型，离线调试循环
 STAgent.run('列出所有世界书')
+STAgent.open() / STAgent.close()            // 开 / 关面板
 ```
 
 加工具：`tools.js` 里 `ST_TOOLS`（酒馆内）或 `BRIDGE_TOOLS`（需桥接）各加一项 `{name, kind, desc, params, run}`，系统提示会自动带上；需要新的服务端能力就在 `st-agent-bridge/index.js` 加路由。
