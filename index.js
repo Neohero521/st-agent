@@ -1,5 +1,6 @@
 import { getContext } from '../../../extensions.js';
 import { toolByName, toolsPrompt, activeTools } from './tools.js';
+import { ADV_TOOLS, advToolByName, advToolsPrompt, helperInfo } from './adv-tools.js';
 
 const MODULE = 'st-agent';
 const BRIDGE_ID = 'st-agent-bridge';
@@ -150,7 +151,7 @@ async function buildSystemPrompt() {
 ${env}
 
 可用工具：
-${toolsPrompt()}
+${toolsPrompt()}${advToolsPrompt()}
 
 ## 输出协议（必须严格遵守）
 
@@ -207,7 +208,7 @@ function parseToolCalls(text) {
             const obj = JSON.parse(m[1]);
             const name = obj.tool || obj.name;
             const args = obj.args || obj.arguments || obj.parameters || {};
-            if (name && toolByName(name)) calls.push({ name, args, raw: m[0] });
+            if (name && (toolByName(name) || advToolByName(name))) calls.push({ name, args, raw: m[0] });
         } catch { /* ignore */ }
     }
     return calls;
@@ -302,7 +303,7 @@ async function stepGenerate(list, onChunk) {
 }
 
 async function executeTool(call) {
-    const tool = toolByName(call.name);
+    const tool = toolByName(call.name) || advToolByName(call.name);
     if (!tool) throw new Error(`未知工具：${call.name}`);
     if (call.parseError) throw new Error(`参数不是合法 JSON：${call.parseError}`);
     return tool.run(call.args || {});
@@ -357,7 +358,7 @@ async function runAgent(task) {
 
             for (const call of calls) {
                 if (abortController.signal.aborted) break;
-                const tool = toolByName(call.name);
+                const tool = toolByName(call.name) || advToolByName(call.name);
                 const kind = tool?.kind || 'write';
                 const needApproval = settings.approval === 'all'
                     || (settings.approval === 'write' && ['write', 'exec', 'dangerous'].includes(kind))
@@ -686,7 +687,7 @@ function syncSettingsUI() {
 function registerChatTools() {
     const c = ctx();
     if (!c.registerFunctionTool) return;
-    for (const tool of activeTools()) {
+    for (const tool of [...activeTools(), ...ADV_TOOLS]) {
         const name = `stagent_${tool.name.replace(/\./g, '_')}`;
         if (!settings.registerChatTools) {
             c.unregisterFunctionTool?.(name);
@@ -717,10 +718,12 @@ function registerChatTools() {
 
 async function refreshBridgeState() {
     const online = await pingBridge();
+    const th = helperInfo();
     if (currentView) {
-        currentView.root.querySelector('.sta-bridge-state').textContent = online
-            ? '酒馆内工具 + 磁盘桥接（可读写任意文件、跑命令）'
-            : '酒馆内工具（角色卡 / 世界书 / 聊天 / 设置 / 正则 / STscript）';
+        const parts = ['酒馆内工具（角色卡 / 世界书 / 聊天 / 变量 / 注入 / 正则 / STscript）'];
+        if (th.online) parts.push(`酒馆助手 v${th.version}（脚本树可控）`);
+        if (online) parts.push('磁盘桥接（任意文件 + 命令）');
+        currentView.root.querySelector('.sta-bridge-state').textContent = parts.join(' + ');
         updateStatus('就绪');
     }
     return online;
@@ -733,7 +736,7 @@ function initialize() {
         run: runAgent,
         executeTool,
         parseToolCalls,
-        get tools() { return activeTools(); },
+        get tools() { return [...activeTools(), ...ADV_TOOLS]; },
         mockGenerate: fn => { generateOverride = fn; },
         get settings() { return settings; },
         stop: () => abortController?.abort(),
