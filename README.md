@@ -12,17 +12,17 @@
 https://github.com/Neohero521/st-agent
 ```
 
-仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `style.css` 均在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
+仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `adv-tools.js` / `style.css` 均在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
 
-**方式二：手动复制四个文件**
+**方式二：手动复制文件**
 
-把仓库根目录的 `manifest.json`、`index.js`、`tools.js`、`style.css` 放进
+把仓库根目录的 `manifest.json`、`index.js`、`tools.js`、`adv-tools.js`、`style.css` 放进
 
 ```
 <酒馆根目录>/data/<你的用户名>/extensions/st-agent/
 ```
 
-没有目录就自己建。`tools.js` 必须一起放（被 `index.js` import）。刷新页面即可。
+没有目录就自己建。`tools.js` / `adv-tools.js` 必须一起放（被 `index.js` import）。刷新页面即可。
 
 **方式三：一条命令（本目录 / zip 版）**
 
@@ -55,6 +55,30 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 
 全部改动走酒馆自己的 `/api/*`，所以**酒馆内存缓存是同步的**——改完立刻生效，不用重启。
 
+## 进阶能力（v1.1）
+
+工具数 33 → 55。新的一层直接调酒馆内部的 `getContext()`（`chatMetadata` / `setExtensionPrompt` / `loadWorldInfo` / `variables.*` / `getPresetManager` / `swipe`），比走 HTTP 更直接，写完即同步缓存。
+
+**变量（MVU 场景核心）**：`var.get` `var.set` `var.delete`
+作用域 `chat`（聊天变量，MVU 主用）/ `message`（楼层变量，自动落到 `chat[i].variables[swipe_id]`）/ `global` / `character`。值按酒馆规则 JSON 字符串化，和 `/setvar` 完全一致，所以 MVU、提示词模板都能直接读到。
+
+**楼层消息**：`msg.get` `msg.set` `msg.create` `msg.delete` `msg.swipe`
+按楼层读写，支持 role 改写（`system` 写成旁白）、隐藏/显示（`is_system`）、多 swipe 切换、插入位置指定。
+
+**世界书条目**：`lb.getEntries` `lb.setEntry` `lb.deleteEntry` `lb.bindChat`
+条目级增改（只传要改的字段，新条目自动补全酒馆要求的默认字段），并且走 `loadWorldInfo` / `saveWorldInfo`，编辑器缓存同步。
+
+**提示词注入**：`inject.set` `inject.clear` `inject.list`
+把一段常驻文本插进提示词（`in_prompt` / `in_chat` + depth / `before_prompt`，可选 role 与是否允许世界书扫描）。等于让 Agent 给你加“临时世界书”。
+
+**正则**：`regex.test` `regex.setEnabled`
+拿真实正则对任意文本试跑看替换结果，错了不会弄脏聊天；也能一键启停全局/角色正则。
+
+**预设与人格**：`preset.list` `preset.load` `persona.set`
+
+**和「酒馆助手」(JS-Slash-Runner) 协同**：`script.list` `script.set`
+检测到酒馆助手 4.x 时，可以直接列/建/改它的脚本树（`code` 传完整 JS）。这是“按意愿改造酒馆 UI 与行为”的通道；没装也不影响其它 53 个工具。
+
 ## 可选增强：磁盘桥接
 
 上面这些已经覆盖「酒馆内部文件」的全部 CRUD。如果你还想要**任意路径读写、grep 整个装包、跑 shell 命令**，再装 `st-agent-bridge`（服务端插件）：
@@ -69,7 +93,7 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 
 ## 怎么用
 
-- 直接说人话：「把 Eldoria 里所有 constant 条目按 insertion_order 重排」「找出提到旧角色名的聊天，列出来」「清掉正则里没启用的条目」
+- 直接说人话：「把 Eldoria 里所有 constant 条目按 insertion_order 重排」「找出提到旧角色名的聊天，列出来」「清掉正则里没启用的条目」「把这章的 MVU 变量按楼层补齐」
 - 面板按 `你 → 计划 → 工具调用（可展开看原始结果）→ 结论` 流式展示
 - 审批三档：仅高危 / 写操作 / 每步确认（设置里切）
 - 步数上限默认 20，随时「停止」
@@ -93,22 +117,22 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 酒馆开了 CSRF 保护时，扩展用的是酒馆自己的请求封装，正常不会触发；如果你手动改过 `request.js` 或用了反向代理改写，需要放行。
 
 **想确认装了几个工具**
-F12 执行 `STAgent.tools.length`：没装桥接是 33，装了是 42。
+F12 执行 `STAgent.tools.length`：基础 55（含进阶层），装桥接是 64。
 
 ## 开发
 
 ```js
 STAgent.tools                              // 当前可用工具（随桥接状态变化）
-STAgent.executeTool({name:'world.list', args:{}})
+STAgent.executeTool({name:'var.get', args:{scope:'chat'}})
 STAgent.mockGenerate(fn)                   // 用自定义函数代替模型，离线调试循环
 STAgent.run('列出所有世界书')
 ```
 
-加工具：`tools.js` 里 `ST_TOOLS`（酒馆内）或 `BRIDGE_TOOLS`（需桥接）各加一项 `{name, kind, desc, params, run}`，系统提示会自动带上；需要新的服务端能力就在 `st-agent-bridge/index.js` 加路由。
+加工具：`tools.js` 里的 `ST_TOOLS`（酒馆内）或 `BRIDGE_TOOLS`（需桥接），以及 `adv-tools.js` 里的 `ADV_TOOLS`，各加一项 `{name, kind, desc, params, run}`，系统提示会自动带上；需要新的服务端能力就在 `st-agent-bridge/index.js` 加路由。
 
 ## 已知限制
 
-- 角色卡 `world`（绑定世界书）字段酒馆的 `edit-attribute` 接口不认，暂不支持写入，走 UI 或 STscript
+- 角色卡 `world`（绑定世界书）字段酒馆的 `edit-attribute` 接口不认，暂不支持写入，走 `world.get` + UI 或 STscript
 - 同一时间只跑一个任务，没有多会话隔离
 - 默认直连模式下请求由酒馆内部管理，「停止」只能阻止下一步，正在跑的这次生成要等它返回
 - 桥接的 `exec` 是给高级用户开的口子，默认建议只开读写
