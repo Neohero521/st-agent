@@ -4,15 +4,27 @@
 
 ## 安装（30 秒）
 
-只有一步：把 `st-agent` 这个文件夹整个丢进
+**方式一：用酒馆自带的「从 URL 安装扩展」（推荐）**
+
+扩展 → 安装扩展 → 粘贴仓库地址：
 
 ```
-<酒馆根目录>/data/<你的用户名>/extensions/
+https://github.com/Neohero521/st-agent
 ```
 
-即最终路径为 `data/<用户名>/extensions/st-agent/manifest.json`。没有 `extensions` 目录就自己建。刷新酒馆页面（或重启），右下角出现「Agent」悬浮球，点开就能用。
+仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `style.css` 均在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
 
-一键脚本（可选）：
+**方式二：手动复制四个文件**
+
+把仓库根目录的 `manifest.json`、`index.js`、`tools.js`、`style.css` 放进
+
+```
+<酒馆根目录>/data/<你的用户名>/extensions/st-agent/
+```
+
+没有目录就自己建。`tools.js` 必须一起放（被 `index.js` import）。刷新页面即可。
+
+**方式三：一条命令（本目录 / zip 版）**
 
 ```bash
 bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
@@ -23,15 +35,6 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 ```
 
 装完在面板设置里选一个「模型配置」（就是酒馆连接管理器里已有的 API），然后直接下指令。
-
-想从 GitHub 拉取也可以：
-
-```bash
-git clone https://github.com/Neohero521/st-agent.git /tmp/st-agent
-cp -r /tmp/st-agent/st-agent "<酒馆根目录>/data/<用户名>/extensions/"
-```
-
-（酒馆自带的「从 URL 安装扩展」只扫描一层目录，本仓库内含扩展 + 可选桥接两个目录，所以手动复制 `st-agent` 子目录最稳妥。）
 
 ## 它能做什么
 
@@ -71,8 +74,11 @@ cp -r /tmp/st-agent/st-agent "<酒馆根目录>/data/<用户名>/extensions/"
 
 ## 常见问题
 
+**从 URL 安装报 500**
+酒馆的安装接口只读“克隆目录根”的 `manifest.json`，根上没有就一律 500。如今仓库根已经有了；如果仍报 500，看酒馆服务端日志，基本是主机没装 `git` 或到 GitHub 的网络不通（此时改用手动复制）。
+
 **悬浮球没出现**
-路径放错了。必须是 `data/<用户名>/extensions/st-agent/`，不是 `extensions/third-party/`、也不是根目录的 `extensions/`。放对后 F12 控制台应能看到 `STAgent`。
+路径放错了。必须是 `data/<用户名>/extensions/st-agent/`，且目录里直接能看到 `manifest.json` 与 `index.js`（不是再多一层 st-agent/）。放对后 F12 控制台应能看到 `STAgent`。
 
 **面板里没有模型配置**
 先去酒馆「连接管理器」建一个 API 配置，再回面板选。
@@ -99,3 +105,4 @@ STAgent.run('列出所有世界书')
 - 角色卡 `world`（绑定世界书）字段酒馆的 `edit-attribute` 接口不认，暂不支持写入，走 UI 或 STscript
 - 同一时间只跑一个任务，没有多会话隔离
 - 桥接的 `exec` 是给高级用户开的口子，默认建议只开读写
+- 从 URL 安装后目录里会多出 `install.sh`、`README.md`、`st-agent-bridge/` 等文件，它们不参与运行；后续 `git pull` 可原地升级扩展本体
