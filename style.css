@@ -334,10 +334,25 @@
 
 .sta-hint { margin-top: 10px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.06); font-size: 11px; color: var(--sta-muted); }
 
-/* 移动端：全屏 */
-@media (max-width: 720px) {
-    .sta-panel { width: 100vw; border-left: none; }
-    .sta-fab { right: 14px; bottom: 18px; padding: 11px 16px 11px 12px; }
+/* 扩展菜单入口（移动端从魔杖菜单打开） */
+.sta-menu-item { cursor: pointer; }
+.sta-menu-item .extensionsMenuExtensionButton { color: var(--sta-gold); margin-right: 8px; }
+
+/* 面板打开时锁住背景滚动 */
+body.sta-lock { overflow: hidden; }
+
+/* 移动端：全屏 + 隐藏悬浮球（改走酒馆扩展菜单入口） */
+@media (max-width: 720px), (pointer: coarse) {
+    .sta-root { z-index: 20000; }
+    .sta-fab { display: none; }
+    .sta-panel {
+        width: 100vw;
+        height: 100dvh;
+        border-left: none;
+        border-top: 1px solid var(--sta-line);
+    }
+    .sta-header { padding-top: calc(12px + env(safe-area-inset-top, 0px)); }
     .sta-log { padding: 14px 12px 8px; }
     .sta-log-item { font-size: 13px; }
+    .sta-composer { padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
 }
