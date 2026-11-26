@@ -498,6 +498,253 @@ function setScript({ name, code, enabled = true } = {}) {
     return { ok: true, name, action: exists ? 'updated' : 'created', total: next.length };
 }
 
+/* ------------------------------ v1.2：分支 / 事件触发器 / 人格 / 群聊 / 宏 ------------------------------ */
+
+let scriptMod;
+
+async function getScriptModule() {
+    if (scriptMod !== undefined) return scriptMod;
+    for (const path of ['/script.js', '../../../../script.js', '../../../script.js']) {
+        try {
+            const mod = await import(path);
+            if (mod) { scriptMod = mod; return scriptMod; }
+        } catch { /* try next */ }
+    }
+    scriptMod = null;
+    return scriptMod;
+}
+
+async function branchChatAt({ id = -1 } = {}) {
+    const index = indexOfId(id);
+    let mod;
+    for (const path of ['/scripts/bookmarks.js', '../../../../scripts/bookmarks.js']) {
+        try { mod = await import(path); break; } catch { /* try next */ }
+    }
+    if (!mod?.branchChat) throw new Error('当前酒馆版本未暴露 branchChat（需要 1.12+）');
+    const name = await mod.branchChat(index, {});
+    return { ok: !!name, from_message: index, new_chat: name || null };
+}
+
+function renameChatTo({ name } = {}) {
+    if (!name) throw new Error('需要新聊天名');
+    if (!c().chatId) throw new Error('当前没有打开的聊天');
+    c().renameChat?.(name);
+    return { ok: true, old: c().chatId, note: 'renameChat 由酒馆内部完成，新名以 UI 为准' };
+}
+
+/* --- 事件触发器：让 Agent 能"盯着"酒馆，被动变主动 --- */
+
+const attachedTriggers = new Map();
+
+function triggerList() {
+    try {
+        const es = c().extensionSettings;
+        if (!Array.isArray(es['st-agent-triggers'])) es['st-agent-triggers'] = [];
+        return es['st-agent-triggers'];
+    } catch {
+        return [];
+    }
+}
+
+function detachTrigger(id) {
+    const item = attachedTriggers.get(id);
+    if (!item) return false;
+    try { c().eventSource?.removeListener?.(item.event, item.handler); } catch { /* ignore */ }
+    attachedTriggers.delete(id);
+    return true;
+}
+
+function attachTrigger(t) {
+    if (!t?.id || !t?.event) return;
+    detachTrigger(t.id);
+    const types = c().eventTypes || {};
+    const eventName = types[String(t.event).toUpperCase()] || t.event;
+    const source = c().eventSource;
+    if (!source) throw new Error('当前版本没有 eventSource');
+    const handler = async data => {
+        try {
+            let text = '';
+            if (typeof data === 'number') text = c().chat?.[data]?.mes || '';
+            else if (typeof data === 'string') text = data;
+            else text = String(data ?? '');
+            if (!text) return;
+            if (t.match) {
+                const re = buildRegExp(t.match);
+                const hit = re ? re.test(text) : text.includes(String(t.match));
+                if (!hit) return;
+            }
+            await globalThis.STAgent?.run?.(t.task ? t.task.replace('{text}', text.slice(0, 2000)) : `处理这条新消息：${text.slice(0, 800)}`);
+        } catch (error) {
+            console.warn('[st-agent] 触发器执行失败：', error);
+        }
+    };
+    source.on(eventName, handler);
+    attachedTriggers.set(t.id, { event: eventName, handler });
+}
+
+function addTrigger({ id, event = 'message_received', match = '', task = '' } = {}) {
+    const rid = id || `trg_${Date.now()}`;
+    const list = triggerList();
+    const item = { id: rid, event, match, task, enabled: true };
+    const i = list.findIndex(x => x.id === rid);
+    if (i >= 0) list[i] = item;
+    else list.push(item);
+    c().saveSettingsDebounced?.();
+    attachTrigger(item);
+    return { ok: true, ...item };
+}
+
+function removeTrigger({ id } = {}) {
+    if (!id) throw new Error('需要触发器 id');
+    const list = triggerList();
+    const i = list.findIndex(x => x.id === id);
+    if (i < 0) return { ok: false, reason: `没有 id=${id} 的触发器` };
+    list.splice(i, 1);
+    c().saveSettingsDebounced?.();
+    const detached = detachTrigger(id);
+    return { ok: true, removed: id, detached };
+}
+
+function listTriggers() {
+    const list = triggerList();
+    const types = Object.keys(c().eventTypes || {}).sort();
+    return {
+        count: list.length,
+        triggers: list.map(t => ({ ...t, attached: attachedTriggers.has(t.id) })),
+        usable_events: types.slice(0, 40),
+    };
+}
+
+/* --- 人格 --- */
+
+function personaAvatar(name) {
+    // power_user.personas: { avatar文件名: 显示名 }
+    const pu = c().powerUserSettings || {};
+    const pair = Object.entries(pu.personas || {}).find(([, n]) => n === name);
+    return pair ? pair[0] : null;
+}
+
+function listPersonas() {
+    const pu = c().powerUserSettings || {};
+    const descs = pu.persona_descriptions || {};
+    const current = c().name1;
+    return {
+        current,
+        count: Object.keys(pu.personas || {}).length,
+        personas: Object.entries(pu.personas || {}).map(([avatar, name]) => ({
+            name,
+            avatar,
+            current: name === current,
+            description: (descs[avatar]?.description || '').slice(0, 200),
+            position: descs[avatar]?.position,
+            depth: descs[avatar]?.depth,
+            role: descs[avatar]?.role,
+        })),
+        global_description: (pu.persona_description || '').slice(0, 200),
+    };
+}
+
+function setPersonaDesc({ text, name, position, depth, role } = {}) {
+    const pu = c().powerUserSettings;
+    if (!pu) throw new Error('当前版本没有 powerUserSettings');
+    const targetName = name || c().name1;
+    const avatar = personaAvatar(targetName);
+    pu.personas = pu.personas || {};
+    pu.persona_descriptions = pu.persona_descriptions || {};
+    if (avatar) {
+        const item = pu.persona_descriptions[avatar] || {};
+        if (text !== undefined) item.description = String(text ?? '');
+        if (position !== undefined) item.position = Number(position);
+        if (depth !== undefined) item.depth = Number(depth);
+        if (role !== undefined) item.role = Number(role);
+        pu.persona_descriptions[avatar] = item;
+        if (targetName === c().name1 && text !== undefined) pu.persona_description = String(text ?? '');
+        c().saveSettingsDebounced?.();
+        return { ok: true, persona: targetName, avatar, scope: 'persona', chars: (item.description || '').length };
+    }
+    if (text === undefined) throw new Error(`找不到人格「${targetName}」的 avatar，且没传 text`);
+    pu.persona_description = String(text ?? '');
+    c().saveSettingsDebounced?.();
+    return { ok: true, persona: targetName, scope: 'global', chars: pu.persona_description.length };
+}
+
+async function switchPersona({ name } = {}) {
+    if (!name) throw new Error('需要人格名');
+    if (!personaAvatar(name)) throw new Error(`没有名为「${name}」的人格`);
+    const mod = await getScriptModule();
+    if (!mod?.setUserName) throw new Error('当前版本未暴露 setUserName');
+    await mod.setUserName(name);
+    return { ok: true, user: c().name1 };
+}
+
+/* --- 群聊 --- */
+
+function listGroups() {
+    const groups = c().groups || [];
+    return {
+        current: c().groupId || null,
+        count: groups.length,
+        groups: groups.map(g => ({
+            id: g.id,
+            name: g.name,
+            members: (g.members || []).length,
+            disabled: !!g.disabled,
+            chat_id: g.chat_id || null,
+        })),
+    };
+}
+
+async function activateGroup({ id, name } = {}) {
+    const groups = c().groups || [];
+    const g = groups.find(x => String(x.id) === String(id)) || groups.find(x => x.name === name);
+    if (!g) throw new Error('找不到该群聊，先用 group.list 查 id');
+    if (!g.chat_id) throw new Error(`群聊「${g.name}」还没有聊天文件，请先在 UI 里打开一次`);
+    await c().openGroupChat(g.id, g.chat_id);
+    return { ok: true, group: g.name, chat: g.chat_id };
+}
+
+/* --- 杂项 --- */
+
+async function countTokens({ text } = {}) {
+    if (text === undefined) throw new Error('需要 text');
+    const n = await c().getTokenCountAsync?.(String(text));
+    if (n === undefined || n === null) throw new Error('当前版本没有 getTokenCountAsync');
+    return { tokens: n, chars: String(text).length };
+}
+
+function expandMacros({ text } = {}) {
+    if (text === undefined) throw new Error('需要 text');
+    const out = c().substituteParams?.(String(text));
+    if (out === undefined) throw new Error('当前版本没有 substituteParams');
+    return { input: String(text), output: String(out) };
+}
+
+function genInfo() {
+    return {
+        main_api: c().mainApi,
+        model: (() => { try { return c().getChatCompletionModel?.() || null; } catch { return null; } })(),
+        max_context: c().maxContext,
+        chat: c().chatId || null,
+        messages: c().chat?.length ?? 0,
+    };
+}
+
+async function stopGen() {
+    try {
+        await c().stopGeneration?.();
+        return { ok: true };
+    } catch (error) {
+        return { ok: false, reason: error.message };
+    }
+}
+
+async function setGlobalBook({ name } = {}) {
+    if (!name) throw new Error('需要世界书名字');
+    if (!c().getWorldInfoNames?.().includes(name)) throw new Error(`世界书「${name}」不存在`);
+    const r = await c().executeSlashCommandsWithOptions?.(`/world ${name}`);
+    return { ok: true, global_book: name, result: r?.pipe ?? null };
+}
+
 /* ------------------------------ 工具清单 ------------------------------ */
 
 export const ADV_TOOLS = [
@@ -632,6 +879,97 @@ export const ADV_TOOLS = [
         desc: '在「酒馆助手」里新建/更新一个脚本（code 为完整 JS 源码，可实现任意酒馆改造）。',
         params: { name: '脚本名', code: 'JS 源码', enabled: '是否启用' },
         run: a => setScript(a),
+    },
+    /* ---------- v1.2 ---------- */
+    {
+        name: 'chat.branch', kind: 'write',
+        desc: '从某楼开始分叉出一条新聊天（SSD 式叙事分支）。会切换当前聊天。',
+        params: { id: '分叉起点楼层 id，-1=最后一楼' },
+        run: a => branchChatAt(a),
+    },
+    {
+        name: 'chat.rename', kind: 'write',
+        desc: '重命名当前聊天文件。',
+        params: { name: '新名字' },
+        run: a => renameChatTo(a),
+    },
+    {
+        name: 'event.on', kind: 'write',
+        desc: '注册一个触发器：酒馆里发生某事件且内容命中关键词时，自动跑一个 Agent 任务（被动变主动）。task 里可用 {text} 占位命中内容。',
+        params: { id: '可选 id', event: 'message_received / message_sent / character_message_rendered / generation_after_commands', match: '关键词或 /正则/', task: '要执行的任务' },
+        run: a => addTrigger(a),
+    },
+    {
+        name: 'event.off', kind: 'write',
+        desc: '删除触发器。',
+        params: { id: '触发器 id' },
+        run: a => removeTrigger(a),
+    },
+    {
+        name: 'event.list', kind: 'read',
+        desc: '列出所有触发器及其挂载状态，并给出可用事件名。',
+        params: {},
+        run: () => listTriggers(),
+    },
+    {
+        name: 'persona.list', kind: 'read',
+        desc: '列出全部用户人格（名字/头像/描述/是否当前），以及当前 {user} 名。',
+        params: {},
+        run: () => listPersonas(),
+    },
+    {
+        name: 'persona.desc', kind: 'write',
+        desc: '写人格描述并可选设置插入位置/深度/角色（{user} 宏内容）。',
+        params: { text: '描述文本', name: '人格名，缺省=当前', position: '0=系统提示 1=聊天内', depth: '插入深度', role: '0系统 1用户 2AI' },
+        run: a => setPersonaDesc(a),
+    },
+    {
+        name: 'persona.switch', kind: 'write',
+        desc: '切换当前用户人格。',
+        params: { name: '人格名' },
+        run: a => switchPersona(a),
+    },
+    {
+        name: 'group.list', kind: 'read',
+        desc: '列出群聊及其成员数、聊天文件、当前是否在群聊。',
+        params: {},
+        run: () => listGroups(),
+    },
+    {
+        name: 'group.activate', kind: 'write',
+        desc: '切换到指定群聊。',
+        params: { id: '群 id', name: '或群名' },
+        run: a => activateGroup(a),
+    },
+    {
+        name: 'token.count', kind: 'read',
+        desc: '用酒馆自己的分词器算 token 数（和上下文预算口径一致）。',
+        params: { text: '待算文本' },
+        run: a => countTokens(a),
+    },
+    {
+        name: 'macro.expand', kind: 'read',
+        desc: '展开酒馆宏（{{user}}/{{char}}/{{getvar::x}}/{{time}} 等），用于验证变量与宏是否生效。',
+        params: { text: '含宏的文本' },
+        run: a => expandMacros(a),
+    },
+    {
+        name: 'gen.info', kind: 'read',
+        desc: '查看当前 API、模型名、上下文预算、当前聊天楼层数。',
+        params: {},
+        run: () => genInfo(),
+    },
+    {
+        name: 'gen.stop', kind: 'write',
+        desc: '中断正在进行的生成。',
+        params: {},
+        run: () => stopGen(),
+    },
+    {
+        name: 'lb.setGlobal', kind: 'write',
+        desc: '把某本世界书设为全局激活（等同 /world 命令）。',
+        params: { name: '世界书名' },
+        run: a => setGlobalBook(a),
     },
 ];
 
