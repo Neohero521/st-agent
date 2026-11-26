@@ -1,0 +1,12 @@
+{
+    "allowExec": true,
+    "allowDelete": true,
+    "extraRoots": [],
+    "denyGlobs": ["**/.env", "**/secrets.json", "**/*.secret", "**/.git/config"],
+    "maxReadBytes": 2097152,
+    "maxWriteBytes": 10485760,
+    "backup": true,
+    "audit": true,
+    "execTimeoutMs": 120000,
+    "ignoreDirs": ["node_modules", ".git", "dist", "build", "__pycache__", ".venv"]
+}
