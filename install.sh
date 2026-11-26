@@ -34,14 +34,14 @@ fi
 # 源：zip 版在 st-agent/ 子目录；如果脚本直接放在仓库根（根即扩展），就用本目录
 SRC="$HERE/st-agent"
 [ -f "$SRC/manifest.json" ] || SRC="$HERE"
-if [ ! -f "$SRC/manifest.json" ] || [ ! -f "$SRC/index.js" ] || [ ! -f "$SRC/tools.js" ]; then
-    echo "✗ 找不到扩展文件（manifest.json / index.js / tools.js）"
+if [ ! -f "$SRC/manifest.json" ] || [ ! -f "$SRC/index.js" ] || [ ! -f "$SRC/tools.js" ] || [ ! -f "$SRC/adv-tools.js" ]; then
+    echo "✗ 找不到扩展文件（manifest.json / index.js / tools.js / adv-tools.js）"
     exit 1
 fi
 mkdir -p "$EXT_DIR"
 rm -rf "$EXT_DIR/st-agent"
 mkdir -p "$EXT_DIR/st-agent"
-cp "$SRC/manifest.json" "$SRC/index.js" "$SRC/tools.js" "$SRC/style.css" "$EXT_DIR/st-agent/"
+cp "$SRC/manifest.json" "$SRC/index.js" "$SRC/tools.js" "$SRC/adv-tools.js" "$SRC/style.css" "$EXT_DIR/st-agent/"
 echo "✓ 扩展 → $EXT_DIR/st-agent"
 
 # 3. 可选：磁盘桥接
@@ -60,4 +60,4 @@ fi
 
 echo ""
 echo "完成。刷新酒馆页面，右下角出现「Agent」悬浮球。"
-echo "自检：F12 控制台执行 STAgent.tools.length（无桥接 33，有桥接 42）"
+echo "自检：F12 控制台执行 STAgent.tools.length（无桥接 55，有桥接 64）"

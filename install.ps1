@@ -31,7 +31,7 @@ if ($UserHandle -and (Test-Path (Join-Path $DataDir $UserHandle))) {
 # 源：zip 版在 st-agent\ 子目录；如果脚本直接放在仓库根（根即扩展），就用本目录
 $Src = Join-Path $Here "st-agent"
 if (-not (Test-Path (Join-Path $Src "manifest.json"))) { $Src = $Here }
-foreach ($f in @("manifest.json", "index.js", "tools.js", "style.css")) {
+foreach ($f in @("manifest.json", "index.js", "tools.js", "adv-tools.js", "style.css")) {
     if (-not (Test-Path (Join-Path $Src $f))) {
         Write-Error "找不到扩展文件 $f"
         exit 1
@@ -41,7 +41,7 @@ New-Item -ItemType Directory -Force -Path $ExtDir | Out-Null
 $ExtTarget = Join-Path $ExtDir "st-agent"
 if (Test-Path $ExtTarget) { Remove-Item $ExtTarget -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $ExtTarget | Out-Null
-foreach ($f in @("manifest.json", "index.js", "tools.js", "style.css")) {
+foreach ($f in @("manifest.json", "index.js", "tools.js", "adv-tools.js", "style.css")) {
     Copy-Item (Join-Path $Src $f) $ExtTarget -Force
 }
 Write-Host "OK 扩展 -> $ExtTarget"
@@ -69,4 +69,4 @@ if ($WithBridge) {
 
 Write-Host ""
 Write-Host "完成。刷新酒馆页面，右下角出现「Agent」悬浮球。"
-Write-Host "自检：F12 控制台执行 STAgent.tools.length（无桥接 33，有桥接 42）"
+Write-Host "自检：F12 控制台执行 STAgent.tools.length（无桥接 55，有桥接 64）"
