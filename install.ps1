@@ -28,10 +28,22 @@ if ($UserHandle -and (Test-Path (Join-Path $DataDir $UserHandle))) {
 }
 
 # 2. 装扩展（这一步就够用了）
+# 源：zip 版在 st-agent\ 子目录；如果脚本直接放在仓库根（根即扩展），就用本目录
+$Src = Join-Path $Here "st-agent"
+if (-not (Test-Path (Join-Path $Src "manifest.json"))) { $Src = $Here }
+foreach ($f in @("manifest.json", "index.js", "tools.js", "style.css")) {
+    if (-not (Test-Path (Join-Path $Src $f))) {
+        Write-Error "找不到扩展文件 $f"
+        exit 1
+    }
+}
 New-Item -ItemType Directory -Force -Path $ExtDir | Out-Null
 $ExtTarget = Join-Path $ExtDir "st-agent"
 if (Test-Path $ExtTarget) { Remove-Item $ExtTarget -Recurse -Force }
-Copy-Item (Join-Path $Here "st-agent") $ExtDir -Recurse
+New-Item -ItemType Directory -Force -Path $ExtTarget | Out-Null
+foreach ($f in @("manifest.json", "index.js", "tools.js", "style.css")) {
+    Copy-Item (Join-Path $Src $f) $ExtTarget -Force
+}
 Write-Host "OK 扩展 -> $ExtTarget"
 
 # 3. 可选：磁盘桥接

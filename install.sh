@@ -31,9 +31,17 @@ else
 fi
 
 # 2. 装扩展（这一步就够用了）
+# 源：zip 版在 st-agent/ 子目录；如果脚本直接放在仓库根（根即扩展），就用本目录
+SRC="$HERE/st-agent"
+[ -f "$SRC/manifest.json" ] || SRC="$HERE"
+if [ ! -f "$SRC/manifest.json" ] || [ ! -f "$SRC/index.js" ] || [ ! -f "$SRC/tools.js" ]; then
+    echo "✗ 找不到扩展文件（manifest.json / index.js / tools.js）"
+    exit 1
+fi
 mkdir -p "$EXT_DIR"
 rm -rf "$EXT_DIR/st-agent"
-cp -r "$HERE/st-agent" "$EXT_DIR/"
+mkdir -p "$EXT_DIR/st-agent"
+cp "$SRC/manifest.json" "$SRC/index.js" "$SRC/tools.js" "$SRC/style.css" "$EXT_DIR/st-agent/"
 echo "✓ 扩展 → $EXT_DIR/st-agent"
 
 # 3. 可选：磁盘桥接
