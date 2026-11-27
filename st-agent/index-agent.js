@@ -3,7 +3,7 @@ import { MODULE, BRIDGE_ID, DEFAULT_SETTINGS, settings, abortController, running
 import { ctx, loadSettings, saveSettings, pingBridge, getProfiles, generateRawFn, getGenerateRaw, serializeHistory, rawGenerate } from './index-boot.js';
 import { typewrite, MODEL_FIELD, buildChatPayload, streamChatCompletion } from './index-stream.js';
 import { buildSystemPrompt } from './index-prompt.js';
-import { parseToolCalls, repairJson, buildCall, extractFinal, sumChars, compactHistory, stepGenerate } from './index-loop.js';
+import { parseToolCalls, repairJson, buildCall, extractFinal, sumChars, compactHistory, stepGenerate, continueText, detectTruncation } from './index-loop.js';
 import { ensureActiveSession, historyForContext, appendTurn, flushSessions, renderSessionList, renderSessionLog } from './index-sessions.js';
 import { HIGH_RISK_PATTERNS, RISK_META, riskOf, batchLines, executeTool, summarizeArgs, briefArgs, takeRefreshNote } from './index-risk.js';
 import { html, buildPanel, bindPanel } from './index-ui.js';
@@ -25,6 +25,11 @@ function toolMeta(ok, brief, level, payload) {
             result: String(payload == null ? '' : payload).slice(0, 1400),
         });
     } catch { return ''; }
+}
+
+function isTokenLimitError(error) {
+    const msg = String(error?.message || error || '');
+    return /max_tokens|max_completion_tokens|max output tokens|maximum context|too many tokens|token.{0,12}too.{0,6}large|invalid.{0,12}max.?tokens?/i.test(msg);
 }
 
 export async function runAgent(task) {
@@ -69,17 +74,43 @@ export async function runAgent(task) {
 
             const draft = addStreamingDraft();
             let generated;
+            let reply = '';
+            let continueRounds = 0;
             try {
                 generated = await stepGenerate(compactHistory(messages), {
                     onText: text => draft.setText(text),
                     onReasoning: (text, done) => draft.setReasoning(text, done),
                 });
+                reply = generated.text || '';
+                // 撞上输出上限时别把半句话当结论：接着写，直到结构闭合
+                if (generated.truncated) {
+                    const resumed = await continueText(compactHistory(messages), reply, {
+                        onText: text => draft.setText(text),
+                        onReasoning: (text, done) => draft.setReasoning(text, done),
+                        onNote: note => updateStatus(`第 ${steps} 步 · ${note}`),
+                    }, settings.maxTokens);
+                    reply = resumed.text;
+                    continueRounds = resumed.rounds;
+                }
             } catch (error) {
                 draft.cleanup();
+                // 有的服务端不接受这么大的单次上限，直接 400；降一档再试，别让用户自己去猜
+                if (isTokenLimitError(error) && settings.maxTokens > 2048) {
+                    const before = settings.maxTokens;
+                    settings.maxTokens = Math.max(2048, Math.floor(settings.maxTokens / 2));
+                    saveSettings();
+                    syncSettingsUI();
+                    addLog('error', `服务端不接受 ${before} token 的输出上限，已降到 ${settings.maxTokens} 重试这一步`);
+                    appendTurn('assistant', `输出上限自动降档：${before} → ${settings.maxTokens}`, 'error', '', { flush: false, render: false });
+                    continue;
+                }
                 throw error;
             }
+            if (continueRounds) {
+                addLog('plan', `已自动续写 ${continueRounds} 次，把断开的回复接完整（单次上限 ${settings.maxTokens} token）`);
+                appendTurn('assistant', `已自动续写 ${continueRounds} 次（单次上限 ${settings.maxTokens} token）`, 'plan', '', { flush: false, render: false });
+            }
             draft.finish(generated.streamed);
-            const reply = generated.text || '';
 
             const calls = parseToolCalls(reply);
             const final = extractFinal(reply);
@@ -90,6 +121,11 @@ export async function runAgent(task) {
                 draft.finalize({ keep: true, text: shown, reasoning: generated.reasoning });
                 messages.push({ role: 'assistant', content: reply });
                 finalText = shown;
+                // 续写次数用完了还没闭合：说清楚是上限不够，而不是模型不想写了
+                if (detectTruncation(reply, settings.maxTokens).truncated) {
+                    addLog('error', '回复结尾仍被切断：单次输出上限不够，把设置里的「单次输出上限」调到 16384，或让它分段写');
+                    appendTurn('assistant', '回复结尾被切断：单次输出上限不足，建议调高或分段写', 'error', '', { flush: false, render: false });
+                }
                 break;
             }
 
@@ -126,6 +162,7 @@ export async function runAgent(task) {
 
             // —— 批次级确认：同一轮的待批准操作合并成一张卡（替代逐条弹窗） ——
             const needConfirm = calls
+                .filter(call => !call.parseError)
                 .map(call => ({ call, level: riskOf(call) }))
                 .filter(({ level }) => {
                     if (settings.approval === 'all') return true;
@@ -148,6 +185,17 @@ export async function runAgent(task) {
 
             for (const call of calls) {
                 if (abortController.signal.aborted) break;
+                // 被截断切坏的参数 JSON：宁可这一条不执行，也不能拿空参数去改用户的卡
+                if (call.parseError) {
+                    const note = `参数不完整，已跳过：${call.parseError}`;
+                    addLog('tool', call.name, note, 'fail', riskOf(call));
+                    appendTurn('assistant', call.name, 'tool', toolMeta(false, note, riskOf(call), note), { flush: false, render: false });
+                    messages.push({
+                        role: 'user',
+                        content: `<tool_result name="${call.name}" ok="false">参数 JSON 不全或格式错误（${call.parseError}），这次没有执行。请重新输出这一个工具调用：JSON 必须完整闭合，不要写注释，字符串里不要放裸换行。参数能简则简。</tool_result>`,
+                    });
+                    continue;
+                }
                 if (denied.has(call)) {
                     addLog('tool', call.name, '已被用户拒绝', 'denied', riskOf(call));
                     messages.push({
