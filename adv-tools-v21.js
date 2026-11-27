@@ -2,15 +2,24 @@
  * v1.11 工具层：把「写完能看见效果」这条链补全。
  *
  * 逐个核对 SillyTavern 1.19.1 源码后确认的写入路径（见 docs/v1.11-write-paths.md）：
- *   - 世界书条目：改 entries → saveWorldInfo(name, data, true) → POST /api/worldinfo/edit（整本原子写）
- *   - 激活三档：global → power_user.world_info.globalSelect / chat → chat_metadata.world_info / character → data.extensions.world
- *   - 酒馆助手脚本：getScriptTrees({type}) / replaceScriptTrees(trees, {type})；字段 content 不是 code，id 必须保留
- *   - 正则：extension_settings.regex + saveSettingsDebounced()
- *   - 预设：POST /api/presets/save {name, apiId, preset}
+ *   - 世界书条目：内存改 entries → saveWorldInfo(name, data, true) → POST /api/worldinfo/edit（整本原子写）
+ *     写完必须「激活」，否则用户拿不到效果。激活有三档：
+ *       global    → power_user.world_info.globalSelect（全局书单）
+ *       chat      → chat_metadata.world_info（当前聊天绑定）
+ *       character → 角色卡 data.extensions.world（随卡走）
+ *   - 酒馆助手脚本：必须走 TavernHelper.getScriptTrees({type}) / replaceScriptTrees(trees, {type})，
+ *     且 Script 结构是 {type:'script', enabled, name, id, content, info, button:{enabled,buttons}, data, export_with}。
+ *     字段是 content 不是 code；id 必须保留，否则 iframe runtime 与按钮绑定全断（旧实现的两个硬 bug）。
+ *   - 正则：extension_settings.regex + saveSettingsDebounced()（与官方 regex 扩展 engine.js 一致）。
+ *   - 预设：POST /api/presets/save {name, apiId, preset}（官方 v1.19 端点）。
  */
 import { getContext } from '../../../extensions.js';
 
 const c = () => getContext();
+
+const SCRIPT_SCOPES = ['global', 'preset', 'character'];
+const TEXT_FIELDS = ['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator_notes',
+    'system_prompt', 'post_history_instructions', 'creator', 'character_version', 'creatorcomment'];
 
 function th() {
     return globalThis.TavernHelper || window.TavernHelper || null;
@@ -38,6 +47,10 @@ function walkScripts(trees, fn) {
     });
 }
 
+function newId() {
+    return globalThis.crypto?.randomUUID?.() ?? `st-agent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 async function characterBy(a) {
     const list = c().characters ?? [];
     if (!a?.name) return list[c().characterId] || null;
@@ -50,6 +63,8 @@ async function readonlyWorld(name) {
     if (!data) throw new Error(`世界书不存在：${name}`);
     return data;
 }
+
+/* ------------------------------ 世界书激活 ------------------------------ */
 
 async function activateWorld({ name, scope = 'chat', value = true, char } = {}) {
     if (!name) throw new Error('需要 name（世界书名）');
@@ -91,7 +106,10 @@ async function activateWorld({ name, scope = 'chat', value = true, char } = {}) 
         const res = await fetch('/api/characters/merge-attributes', {
             method: 'POST',
             headers: c().getRequestHeaders(),
-            body: JSON.stringify({ avatar: target.avatar, data: { extensions: { world: value ? name : '' } } }),
+            body: JSON.stringify({
+                avatar: target.avatar,
+                data: { extensions: { world: value ? name : '' } },
+            }),
         });
         if (!res.ok) {
             const j = await res.json().catch(() => ({}));
@@ -103,6 +121,8 @@ async function activateWorld({ name, scope = 'chat', value = true, char } = {}) 
 
     throw new Error('scope 只能是 global / chat / character');
 }
+
+/* ------------------------------ 新增工具 ------------------------------ */
 
 export const TOOLS = [
     {
@@ -203,3 +223,5 @@ export const TOOLS = [
         },
     },
 ];
+
+export const __TEXT_FIELDS = TEXT_FIELDS;
