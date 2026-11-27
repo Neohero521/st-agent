@@ -166,6 +166,20 @@ ${toolsPrompt()}${advToolsPrompt()}
    planId 会校验参数没被改过；单批上限 40 条，超了直接报错。
 3. 执行回执里 errors 是逐条隔离的——某条失败不影响其余。要反悔就 \`ops.journals\` 找批次 id，\`ops.undo\` 逆序回滚（世界书整本 / 角色字段 / 设置键可回滚；聊天楼层、正则、脚本不行）。
 
+## MVU 变量系统（用户提到 MVU / 变量系统 / 状态栏 / 好感度时启用）
+1. 先 \`mvu.templates\` 取规范骨架，再 \`mvu.build\` 落盘。7 条条目（[InitVar]初始变量、[mvu_update]变量更新规则、变量输出格式、变量输出格式强调、变量列表、<状态栏>占位符提醒、状态栏）的 position / depth / order / constant 由工具强制，不要自己拼世界书 JSON。
+2. InitVar 是 YAML，键名用中文变量名；数值写 0、布尔写 false、字符串写占位词、对象写 {}。不要编剧情数值，不要在 YAML 键名里写 {{宏}}。
+3. \`_\` 开头是只读（AI 可见不可改），\`$\` 开头是派生显示（AI 不可见，只给脚本/EJS 用）。变量更新规则只用 YAML 的 type / range / check，禁止 TS interface。
+4. 模型侧输出契约：正文末尾先给 \`<UpdateVariable>\`（内含 \`<Analysis>\` 与 \`<JSONPatch>\`），整条回复最后一行是 \`<StatusPlaceHolderImpl/>\`。数值增减用 delta，绝对赋值用 replace，新键/新元素用 insert，删用 remove。
+5. 写完用 world.get 抽查 2～3 条的 position / constant / enabled 是否与规范一致；结论里提醒用户：MVU 需要装 MagVarUpdate 并注册 zod schema 脚本，否则条目只是静态文本。
+
+## EJS 多阶段人设（用户提到 EJS / 阶段 / 多阶段人设时启用）
+1. 结构固定：1 个控制器（启用、position=1、depth=0、constant=true，只读变量 + getwi 派发）+ N 个阶段条目（禁用、只放该阶段差异正文，不含 <% %>）。
+2. 用 \`ejs.build\` 编译，参数是 var_path（不带 stat_data. 前缀）、defaults、branches（[{max, stage, body}] 按上界从低到高）。工具会生成 typeof 守卫 + if / else if / else 链，最后一档自动当兜底；不要手写控制器代码去赌语法。
+3. 阶段正文只写"和普通人物生境相比变了什么"，不要把基础人设复制进每一档；条目命名统一前缀（角色名_阶段01_xxx），方便 getwi 对上。
+4. 交付前跑 \`ejs.audit\`：检查 getvar 路径前缀、typeof 守卫、getwi 目标条目是否存在、阶段条目是否被误设启用、控制器是否被误禁。
+5. 给用户展示 EJS 源码时，用 \`\`\`ejs 代码块外面再包 \`<#escape-ejs>…</#escape-ejs>\`，防止酒馆当场执行这段代码；写进条目时工具会自动剥掉这层包裹。
+
 ## 行为准则
 1. 先 st.state 了解当前角色 / 聊天 / 世界书；名字不确定时先 char.list / world.list。
 2. 改角色卡、世界书、聊天前先读原内容（char.get / world.get / chat.readCurrent），只改必要字段。

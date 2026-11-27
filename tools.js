@@ -29,7 +29,7 @@ export function toolsPrompt() {
  */
 import { ADV_TOOLS } from './adv-tools.js';
 
-for (const mod of ['adv-tools-v14', 'adv-tools-v15', 'adv-tools-v16', 'adv-tools-v17', 'adv-tools-v18', 'adv-tools-v19', 'adv-tools-v20', 'adv-tools-v21']) {
+for (const mod of ['adv-tools-v14', 'adv-tools-v15', 'adv-tools-v16', 'adv-tools-v17', 'adv-tools-v18', 'adv-tools-v19', 'adv-tools-v20', 'adv-tools-v21', 'adv-tools-v22']) {
     try {
         const m = await import(`./${mod}.js`);
         if (Array.isArray(m?.TOOLS)) ADV_TOOLS.push(...m.TOOLS);
