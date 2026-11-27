@@ -19,14 +19,23 @@ export async function runAgent(task) {
     setBusy(true);
 
     const view = currentView;
+
+    // —— 续接：接着当前会话的历史往下走，而不是每次从零开 ——
+    // system 每轮重建（含当前卡 / 世界书 / 工具清单），历史只取对话事实
+    const session = ensureActiveSession();
+
+    // 开跑前只在「log 不属于当前会话」时重放（刚刷新过页面 / 刚切换过会话）。
+    // 同一会话连续对话一律追加，绝不重绘：重绘会把上一轮的过程日志（工具调用、结果、
+    // 思考行）抹成 task/final/ops 三条摘要，用户看到的就是"我一说话，记录就被清空了"。
+    if (view.log.dataset.sessId !== session.id || !view.log.querySelector('.sta-log-item')) {
+        renderSessionLog(session);
+    }
+
     // 空会话的引导提示只服务于"还没开始"，第一条任务进来就撤掉
     const hint = view.log.querySelector('.sta-hint');
     if (hint) hint.remove();
     addLog('user', task);
 
-    // —— 续接：接着当前会话的历史往下走，而不是每次从零开 ——
-    // system 每轮重建（含当前卡 / 世界书 / 工具清单），历史只取对话事实
-    const session = ensureActiveSession();
     const history = historyForContext(session);
 
     const system = await buildSystemPrompt();
@@ -144,7 +153,11 @@ export async function runAgent(task) {
                     payload = `执行失败：${error.message}`;
                 }
                 entry.setResult(payload, ok);
-                turnOps.push(call.name + (ok ? '' : '✗'));
+                // 动作摘要带上关键参数：刷新后光看"char.create"不知道建了哪张卡
+                const briefRaw = String(briefArgs(call.name, call.args) || '').replace(/\s+/g, ' ').trim();
+                const briefUsable = briefRaw && briefRaw !== '{}' && briefRaw !== '[]' && briefRaw !== '无参数';
+                const briefCut = briefUsable ? `(${briefRaw.slice(0, 40)})` : '';
+                turnOps.push(call.name + (ok ? '' : '✗') + briefCut);
                 messages.push({
                     role: 'user',
                     content: `<tool_result name="${call.name}" ok="${ok}">${String(payload).slice(0, 12000)}</tool_result>`,
@@ -161,7 +174,7 @@ export async function runAgent(task) {
         // 回写会话：只存「结论 + 动作摘要」，tool_result 不落库（重放时已失效，还会污染上下文）
         try {
             if (finalText) appendTurn('assistant', finalText, 'final');
-            if (turnOps.length) appendTurn('assistant', turnOps.slice(0, 40).join('、'), 'ops');
+            if (turnOps.length) appendTurn('assistant', turnOps.slice(0, 40).join('\n'), 'ops');
             flushSessions();
         } catch (error) {
             console.warn('[st-agent] 会话回写失败：', error && error.message);
