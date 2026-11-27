@@ -841,3 +841,20 @@ body.sta-lock { overflow: hidden; }
     line-height: 1.6;
     word-break: break-all;
 }
+
+/* 计划状态徽标（v1.22）：面板头部一行，手机端一眼看出「计划还没批」 */
+.sta-plan-chip {
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-size: 10px;
+    line-height: 16px;
+    border: 1px solid rgba(212, 175, 55, 0.45);
+    color: #e8cf8a;
+    background: rgba(212, 175, 55, 0.12);
+    white-space: nowrap;
+}
+.sta-plan-chip.sta-plan-pending { color: #ffd35c; border-color: rgba(255, 211, 92, 0.7); animation: staPulse 1.6s ease-in-out infinite; }
+.sta-plan-chip.sta-plan-approved { color: #9de0a8; border-color: rgba(157, 224, 168, 0.5); background: rgba(157, 224, 168, 0.1); }
+.sta-plan-chip.sta-plan-rejected { color: #ff9b8a; border-color: rgba(255, 155, 138, 0.6); }
+@keyframes staPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }

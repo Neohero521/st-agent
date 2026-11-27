@@ -10,6 +10,7 @@ import { askPlan, askApprovalBatch, askApproval, submitTask, populateProfiles, s
 import { registerChatTools } from './index-tools.js';
 import { toolByName, toolsPrompt, activeTools } from './tools.js';
 import { refreshAfterWrite } from './index-sync.js';
+import { planGate } from './index-plan.js';
 import { ADV_TOOLS, advToolByName, advToolsPrompt, helperInfo } from './adv-tools.js';
 
 /* ------------------------------ 写后刷新回执 ------------------------------ */
@@ -72,6 +73,15 @@ export async function executeTool(call) {
     const tool = toolByName(call.name) || advToolByName(call.name);
     if (!tool) throw new Error(`未知工具：${call.name}`);
     if (call.parseError) throw new Error(`参数不是合法 JSON：${call.parseError}`);
+
+    // 计划门（v1.22）：计划模式下、这份计划还没批准时，写类工具直接挡回。
+    // DSH 的 plan-mode 明确只做「软引导」不拦工具；手机端模型爱抢跑，所以这里反过来硬拦——只读工具照常放行。
+    try {
+        const gate = planGate(call.name, riskOf(call));
+        if (gate) return gate;
+    } catch (e) {
+        console.warn('[st-agent] 计划门异常（放行）：', e && e.message);
+    }
 
     const result = await tool.run(call.args || {});
 

@@ -125,6 +125,25 @@ function sessionTokens(s) {
 
 /* ------------------------------ 装配与持久化 ------------------------------ */
 
+/**
+ * 会话里那些「运行时才长出来」的工作状态字段。
+ * 清洗时必须原样透传：initSessions 之前只保留了 id/title/时间/消息，
+ * 于是刷新页面（手机端切后台再回来最常见）会把任务清单、目标、检查点、计划一起清空——
+ * 表现为「刚才还列着三步，回来全没了」。v1.22 修。
+ */
+const EXTRA_FIELDS = ['todos', 'goal', 'goalSeq', 'goalTombstone', 'plan',
+    'checkpoint', 'compactedAt', 'compactCount', 'checkpointBy', 'spill', 'spillSeq'];
+
+function pickExtras(source) {
+    const out = {};
+    for (const key of EXTRA_FIELDS) {
+        const v = source[key];
+        if (v === undefined || v === null) continue;
+        out[key] = v;
+    }
+    return out;
+}
+
 export function initSessions() {
     const raw = Array.isArray(settings.sessions) ? settings.sessions : [];
     // 结构校验 + 清洗：丢掉残破条目，避免后续到处判空
@@ -143,6 +162,7 @@ export function initSessions() {
                     kind: KINDS.has(m.kind) ? m.kind : (m.role === 'user' ? 'task' : 'final'),
                     meta: typeof m.meta === 'string' ? m.meta : '',
                 })),
+            ...pickExtras(s),
         }))
         .sort((a, b) => b.updatedAt - a.updatedAt);
 

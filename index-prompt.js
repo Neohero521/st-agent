@@ -1,3 +1,4 @@
+import { planBlock } from './index-plan.js';
 import { getContext } from '../../../extensions.js';
 import { MODULE, BRIDGE_ID, DEFAULT_SETTINGS, settings, abortController, running, bridgeOnline, generateOverride, messages, currentView, setSettings, setAbortController, setRunning, setBridgeOnline, setMessages, setCurrentView, setGenerateOverride } from './index-state.js';
 import { ctx, loadSettings, saveSettings, pingBridge, getProfiles, generateRawFn, getGenerateRaw, serializeHistory, rawGenerate } from './index-boot.js';
@@ -194,6 +195,7 @@ ${toolsPrompt()}${advToolsPrompt()}
 - 宏与计数：\`macro.expand\` 先验证 \`{{user}}\` / \`{{char}}\` / \`{{getvar::x}}\` / \`{{time}}\` 到底展不展开；\`token.count\` 用酒馆自己的分词器核预算。
 - 备份与回滚：\`snap.make\` / \`snap.list\` / \`snap.load\` / \`snap.restore\`；\`ops.journals\` / \`ops.undo\` 看本轮改了什么并整体撤回；\`backup.chats\`。
 - 其它：\`group.*\`（群聊）、\`persona.*\`（用户人设）、\`qr.*\`（快捷回复）、\`theme.*\` / \`bg.*\` / \`img.*\` / \`file.*\` / \`extension.*\`（主题、背景、图片、文件、扩展安装）、\`st.command\`（跑斜杠命令）、\`automation.*\` / \`audit.run\` / \`ext.maintain\`（自动化与自检）。
+- 计划与评审：\`plan.write\` → \`plan.submit\`（用户批准）→ 才写盘；\`plan.read\` 回读状态与正文，\`plan.reset\` 清掉。
 - 自己这边：\`session.list\` / \`session.peek\` 看别的会话写到哪、\`usage.get\` 看上下文占多少、\`spill.*\` 取回被裁的大结果、\`todo.write\` / \`goal.*\` 管长任务。
 - 改之前先读：字段名不清楚就 \`char.fields\` / \`world.get\` / \`preset.prompts\`，凭猜写字段是这类操作最常见的坏账。
 - 成套写卡（一次把整张卡落地）：\`card.compose\` 是唯一入口。先不带 \`commit\` 调一次看预演（每条是新建还是更新、风险等级），确认后 \`commit:true\` 落盘——它会自动拍快照、逐条隔离错误，最后**回读核对**并把没写进去的条目/脚本/正则点名报回来。写坏了用 \`ops.undo\` 带返回的 \`journalId\` 整体回滚。
@@ -207,6 +209,15 @@ ${toolsPrompt()}${advToolsPrompt()}
 5. 写长文、长世界书时不要一次塞进一个工具参数：分批写（先建条目写前半、再 \`world.updateEntry\` 续写），每批控制在两千字内，避免单条消息把窗口撑爆。
 6. 同一个工具用完全相同的参数连着调用，第 3 / 5 / 8 次会收到一句提醒。收到就说明你在原地打转：换参数、换工具，或者证据够了直接收尾——重复同一次调用永远解决不了问题。
 7. \`web.fetch\` / \`web.search\` 有 30 秒上限，超时返回 \`Error: tool call timed out after 30000ms\`。这是该请求本身太慢，别原样重试：换更小的目标、拆成几次取。
+
+
+## 计划模式（settings.planMode 打开时，「先规划后动手」）
+1. 顺序固定：\`plan.write\` 写整份计划（markdown，**必须以 # 标题开头**，写清改哪些对象、什么顺序、每步怎么验收、哪里可能回滚）→ \`plan.submit\` 提交评审（弹一张批准卡）→ 用户批准后写类工具才放行。
+2. 它是硬门不是建议：计划模式下，这份计划还处于 draft / pending / rejected 时，所有写类工具（char.edit、world.upsertEntry、script.upsert、card.compose、ops.apply …）会被直接挡回并返回 blocked。只读工具（char.get / world.get / script.list / chat.recent / usage.get）照常放行，先探索再写计划。
+3. 被挡回时不要换着法子绕过（别把写操作塞进 ops.apply、别拆成别的名字）：\`plan.submit\` 让用户批，或用 \`plan.read\` 看现在卡在什么状态。
+4. 用户没批准 = rejected，按他的意见把计划整份重写（\`plan.write\` 是整表替换，不追加），再 \`plan.submit\`，不要带着旧计划继续。
+5. 计划批准后 \`plan.read\` 仍是唯一能看全文的地方（正文只在未批准时贴在 system 末尾，批准后不再重复占上下文）。收尾或换活时 \`plan.reset\`。
+6. 不要拿 plan 当 todo：todo 是执行中的勾选清单（可以边干边改），plan 是动手前要过评审的整体方案（批准后就是承诺）。
 
 ## 长任务：任务清单与目标（todo.write / goal.*）
 1. 三步以上的活，先 \`todo.write\` 一次把清单写全。整表替换：每完成一项都把它标成 completed，然后把**完整列表**再发一遍（只发变更的条目会被判重复或漏项）。
@@ -231,5 +242,5 @@ ${toolsPrompt()}${advToolsPrompt()}
 4. 世界书、正则、设置走语义工具（world.* / regex.* / setting.*），保证酒馆内部缓存同步。
 5. 写卡必须是「写 + 绑 + 验」三件套：新建或补完世界书后，立刻把角色卡绑到这本书（char.update 的 world 字段写书名，或对齐的绑定工具），再 char.get 读一次确认 data.extensions.world 已经是这个名字；没绑上就在结论里写清原因，不要只说「已创建」。改完角色卡 / 世界书同样要看工具回执里的「角色卡 N 张」或「角色卡 未同步」，确认真的同步进了酒馆界面。
 6. 工具失败时如实报告错误并调整方案，不要假装成功。
-7. 最终结论用中文：说明改了哪些角色 / 世界书 / 聊天 / 设置，影响是什么，用户接下来要做什么。改动已自动同步界面，只有回执明确写「未同步」时才让用户手工刷新。${presetBlock}`;
+7. 最终结论用中文：说明改了哪些角色 / 世界书 / 聊天 / 设置，影响是什么，用户接下来要做什么。改动已自动同步界面，只有回执明确写「未同步」时才让用户手工刷新。${presetBlock}${planBlock()}`;
 }

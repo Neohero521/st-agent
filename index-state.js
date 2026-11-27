@@ -57,3 +57,17 @@ export function setCurrentView(v) { currentView = v; }
 export function setGenerateOverride(v) { generateOverride = v; }
 export function setSessions(v) { sessions = v; }
 export function setActiveSessionId(v) { activeSessionId = v; }
+
+/**
+ * 跨层钩子：给「不该 import UI 的文件」用的反向注入点。
+ * index-plan / tools-plan 这类底层模块如果直接 import index-ui3 或 index-sessions，
+ * 会在 tools.js ↔ index-risk ↔ index-ui3 ↔ tools-plan 之间绕出依赖环（v1.20 的教训）。
+ * 所以由 index.js 在 initialize 里把真实实现挂上来，底层只读这里。
+ */
+export const uiHooks = {
+    askApproval: null,   // (call, signal) => Promise<boolean>
+    askPlanReview: null, // (plan, signal) => Promise<boolean>
+    getSession: null,    // () => 当前活动会话
+    flush: null,         // () => 立刻把会话落盘（计划改动不节流）
+    paintPlan: null,     // () => 刷新面板头部的计划徽标
+};

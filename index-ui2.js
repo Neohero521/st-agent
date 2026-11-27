@@ -55,10 +55,25 @@ export function setBusy(busy) {
     currentView.input.disabled = busy;
 }
 
+import { getPlan } from './index-plan.js';
+
+export function paintPlanChip() {
+    if (!currentView) return;
+    const chip = currentView.root.querySelector('.sta-plan-chip');
+    if (!chip) return;
+    const p = getPlan();
+    if (!p || !p.body) { chip.hidden = true; chip.textContent = ''; chip.className = 'sta-plan-chip'; return; }
+    const label = { draft: '计划·草稿', pending: '计划·待批', approved: '计划·已批', rejected: '计划·退回' }[p.status] || '计划';
+    chip.hidden = false;
+    chip.textContent = label;
+    chip.className = `sta-plan-chip sta-plan-${p.status}`;
+}
+
 export function updateStatus(text) {
     if (!currentView) return;
     currentView.status.textContent = text;
     currentView.root.classList.toggle('sta-offline', /离线|失败/.test(text));
+    paintPlanChip();
 }
 
 export function addLog(type, text, meta = '', state = '', level = 0) {

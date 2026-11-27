@@ -7,6 +7,7 @@ import { parseToolCalls, repairJson, buildCall, extractFinal, sumChars, compactH
 import { ensureActiveSession, historyForContext, appendTurn, flushSessions, renderSessionList, renderSessionLog, pruneResultText, forceCompact, maybeCompact, pushSpill, setSummarizer, getTodos, COMPACT_INSTRUCTION } from './index-sessions.js';
 import { resetRepeat, noteRepeat, toolTimeoutMs, withTimeout } from './index-guard.js';
 import { goalShouldContinue, noteGoalRound, getGoal } from './index-goal.js';
+import { planStatusLine } from './index-plan.js';
 import { HIGH_RISK_PATTERNS, RISK_META, riskOf, batchLines, executeTool, summarizeArgs, briefArgs, takeRefreshNote } from './index-risk.js';
 import { html, buildPanel, bindPanel } from './index-ui.js';
 import { buildMenuEntry, togglePanel, setBusy, updateStatus, addLog, addStreamingDraft } from './index-ui2.js';
@@ -60,6 +61,12 @@ function taskStateBlock(session, startedAt = Date.now()) {
         lines.push('', '## 当前目标（goal）');
         lines.push(`- ${goal.objective}`);
         lines.push(`- phase=${goal.phase}｜第 ${goal.roundsStarted}/${goal.maxGoalRounds} 轮${goal.blocker ? `｜blocker=${goal.blocker.code}${goal.blocker.note ? '（' + goal.blocker.note + '）' : ''}` : ''}`);
+    }
+    const planLine = planStatusLine();
+    if (planLine) {
+        lines.push('', '## 计划');
+        lines.push(`- ${planLine}`);
+        if (/计划未批准|草稿|待评审|被退回/.test(planLine)) lines.push('- 写类工具会被门挡回；先 plan.write + plan.submit。');
     }
     return lines.length ? lines.join('\n') : '';
 }

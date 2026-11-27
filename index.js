@@ -2,7 +2,7 @@
 try { document.documentElement.dataset.staMod = String(Date.now()); } catch (e) {}
 
 import { getContext } from '../../../extensions.js';
-import { MODULE, BRIDGE_ID, DEFAULT_SETTINGS, settings, abortController, running, bridgeOnline, generateOverride, messages, currentView, setSettings, setAbortController, setRunning, setBridgeOnline, setMessages, setCurrentView, setGenerateOverride } from './index-state.js';
+import { MODULE, BRIDGE_ID, DEFAULT_SETTINGS, settings, abortController, running, bridgeOnline, generateOverride, messages, currentView, setSettings, setAbortController, setRunning, setBridgeOnline, setMessages, setCurrentView, setGenerateOverride, uiHooks } from './index-state.js';
 import { ctx, loadSettings, saveSettings, pingBridge, getProfiles, generateRawFn, getGenerateRaw, serializeHistory, rawGenerate } from './index-boot.js';
 import { typewrite, MODEL_FIELD, buildChatPayload, streamChatCompletion } from './index-stream.js';
 import { buildSystemPrompt } from './index-prompt.js';
@@ -10,8 +10,8 @@ import { parseToolCalls, repairJson, buildCall, extractFinal, sumChars, compactH
 import { HIGH_RISK_PATTERNS, RISK_META, riskOf, batchLines, executeTool, summarizeArgs, briefArgs } from './index-risk.js';
 import { runAgent } from './index-agent.js';
 import { html, buildPanel, bindPanel } from './index-ui.js';
-import { buildMenuEntry, togglePanel, setBusy, updateStatus, addLog, addStreamingDraft } from './index-ui2.js';
-import { askPlan, askApprovalBatch, askApproval, submitTask, populateProfiles, syncSettingsUI } from './index-ui3.js';
+import { buildMenuEntry, togglePanel, setBusy, updateStatus, addLog, addStreamingDraft, paintPlanChip } from './index-ui2.js';
+import { askPlan, askApprovalBatch, askApproval, askPlanReview, submitTask, populateProfiles, syncSettingsUI } from './index-ui3.js';
 import { registerChatTools } from './index-tools.js';
 import { initSessions, flushSessions, getActiveSession, createSession, installSessionPersistence } from './index-sessions.js';
 import { toolByName, toolsPrompt, activeTools } from './tools.js';
@@ -35,6 +35,13 @@ export async function refreshBridgeState() {
 export function initialize() {
     loadSettings();
     // 调试 / 二次开发出口
+    // 跨层钩子（见 index-state 的 uiHooks 注释）：避免底层模块反向 import UI 绕成依赖环
+    uiHooks.askApproval = askApproval;
+    uiHooks.askPlanReview = askPlanReview;
+    uiHooks.getSession = getActiveSession;
+    uiHooks.flush = flushSessions;
+    uiHooks.paintPlan = paintPlanChip;
+
     window.STAgent = {
         run: runAgent,
         executeTool,

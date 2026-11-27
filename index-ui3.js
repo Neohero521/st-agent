@@ -188,6 +188,57 @@ export function askApproval(call, signal) {
     });
 }
 
+/**
+ * 计划批准卡（v1.22）：跟普通 askApproval 的区别是——这里必须让用户看到整份计划再按。
+ * 只显示「plan.submit 2 条目」就让他批，等于盲签；正文用 textContent 塞进去保排版，
+ * 不渲染 markdown（正文是模型写的，不给自己造一个 XSS 面）。
+ */
+export function askPlanReview(plan, signal) {
+    return new Promise(resolve => {
+        let settled = false;
+        const box = currentView.root.querySelector('.sta-approval');
+        const text = box.querySelector('.sta-approval-text');
+        box.hidden = false;
+        box.classList.add('sta-approval-plan');
+        box.classList.remove('sta-approval-batch');
+
+        text.innerHTML = '';
+        const title = document.createElement('div');
+        title.className = 'sta-approval-title';
+        title.textContent = `计划待批准：${plan?.title || '(未命名)'}（rev ${plan?.revision || 0}）｜批准后才会放开写盘，拒绝则退回继续完善`;
+        const body = document.createElement('div');
+        body.className = 'sta-plan-body';
+        body.textContent = String(plan?.body || '');
+        text.append(title, body);
+        if (Array.isArray(plan?.items) && plan.items.length) {
+            const items = document.createElement('div');
+            items.className = 'sta-plan-items';
+            items.textContent = plan.items.map((x, i) => `${i + 1}. ${x?.content || ''}`).join('\n');
+            text.appendChild(items);
+        }
+        box.scrollIntoView?.({ block: 'nearest' });
+
+        const allow = box.querySelector('.sta-allow');
+        const deny = box.querySelector('.sta-deny');
+        let unbind = () => {};
+        const cleanup = value => {
+            if (settled) return;
+            settled = true;
+            unbind();
+            box.hidden = true;
+            box.classList.remove('sta-approval-plan');
+            allow.removeEventListener('click', onAllow);
+            deny.removeEventListener('click', onDeny);
+            resolve(value);
+        };
+        const onAllow = () => cleanup(true);
+        const onDeny = () => cleanup(false);
+        allow.addEventListener('click', onAllow);
+        deny.addEventListener('click', onDeny);
+        unbind = bindAbort(signal, () => cleanup(false));
+    });
+}
+
 export function submitTask() {
     if (running) return;
     const text = currentView.input.value.trim();
