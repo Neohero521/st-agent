@@ -85,6 +85,10 @@ export function buildPanel() {
                     </select>
                 </label>
                 <label class="sta-field sta-switch">
+                    <span>读用户预设</span>
+                    <input class="sta-use-preset" type="checkbox" />
+                </label>
+                <label class="sta-field sta-switch">
                     <span>计划先批准</span>
                     <input class="sta-plan-mode" type="checkbox" />
                 </label>
@@ -128,6 +132,7 @@ export function bindPanel(root) {
     const maxSteps = root.querySelector('.sta-maxsteps');
     const policy = root.querySelector('.sta-approval-policy');
     const streamMode = root.querySelector('.sta-stream-mode');
+    const usePreset = root.querySelector('.sta-use-preset');
     const planMode = root.querySelector('.sta-plan-mode');
     const batchConfirm = root.querySelector('.sta-batch-confirm');
     const regTools = root.querySelector('.sta-register-tools');
@@ -138,7 +143,7 @@ export function bindPanel(root) {
     const newSess = root.querySelector('.sta-new-session');
     const sessCount = root.querySelector('.sta-sessions-count');
 
-    setCurrentView({ root, panel, log, input, send, stop, status, drawer, profileSel, maxSteps, policy, streamMode, planMode, batchConfirm, regTools, sessionsBtn, sessPanel, sessionsList: sessList, sessClose, newSess, sessCount });
+    setCurrentView({ root, panel, log, input, send, stop, status, drawer, profileSel, maxSteps, policy, streamMode, planMode, batchConfirm, regTools, usePreset, sessionsBtn, sessPanel, sessionsList: sessList, sessClose, newSess, sessCount });
 
     root.querySelector('.sta-fab').addEventListener('click', () => togglePanel(true));
     root.querySelector('.sta-close').addEventListener('click', () => togglePanel(false));
@@ -166,6 +171,7 @@ export function bindPanel(root) {
     maxSteps.addEventListener('change', () => { settings.maxSteps = Math.max(1, Number(maxSteps.value) || 20); saveSettings(); });
     policy.addEventListener('change', () => { settings.approval = policy.value; saveSettings(); });
     streamMode.addEventListener('change', () => { settings.streamMode = streamMode.value; saveSettings(); });
+    usePreset.addEventListener('change', () => { settings.usePreset = usePreset.checked; saveSettings(); });
     planMode.addEventListener('change', () => { settings.planMode = planMode.checked; saveSettings(); });
     batchConfirm.addEventListener('change', () => { settings.batchConfirm = batchConfirm.checked; saveSettings(); });
     regTools.addEventListener('change', () => { settings.registerChatTools = regTools.checked; saveSettings(); registerChatTools(); });
