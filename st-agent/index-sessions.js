@@ -177,10 +177,10 @@ export function ensureActiveSession() {
         setActiveSessionId(sessions[0].id);
         return sessions[0];
     }
-    return createSession();
+    return createSession(undefined, { silent: true });
 }
 
-export function createSession(title) {
+export function createSession(title, opts = {}) {
     const s = {
         id: newId(),
         title: title || '新对话',
@@ -191,10 +191,28 @@ export function createSession(title) {
     };
     sessions.unshift(s);
     setActiveSessionId(s.id);
-    saveSessions();
+    flushSessions();
     renderSessionList();
-    renderSessionLog(s);
+    // silent：Agent 自动开新会话时不要重绘日志区，否则用户会觉得"记录被清空了"
+    //         （重绘只服务于"＋ 新对话"按钮，那个场景本来就该看到空白页）
+    if (!opts.silent) renderSessionLog(s);
     return s;
+}
+
+/**
+ * 页面/应用切到后台、关闭时立即落盘。
+ * 手机端 webview 被系统回收时 beforeunload 常不触发，必须补 pagehide + visibilitychange。
+ */
+export function installSessionPersistence() {
+    if (installSessionPersistence.bound) return;
+    installSessionPersistence.bound = true;
+    const flushNow = () => {
+        try { flushSessions(); } catch { /* 卸载路径不抛 */ }
+    };
+    window.addEventListener('pagehide', flushNow);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') flushNow();
+    });
 }
 
 export function switchSession(id) {
@@ -250,7 +268,8 @@ export function appendTurn(role, content, kind) {
     s.updatedAt = nowIso();
     if (s.title === '新对话' || !s.title) s.title = autoTitle(text);
     if (!s.cardName) s.cardName = currentCardName();
-    saveSessions();
+    // 立即落盘：手机端切后台/杀进程时 beforeunload 不一定触发，靠防抖必丢
+    flushSessions();
     renderSessionList();
 }
 
@@ -328,6 +347,8 @@ export function renderSessionLog(session) {
     if (!view || !view.log) return;
     view.log.innerHTML = '';
     const s = session || getActiveSession();
+    // 打上"这块 log 属于哪个会话"的标记：runAgent 靠它判断要不要重绘
+    view.log.dataset.sessId = s ? s.id : '';
     if (!s || !s.messages.length) {
         const hint = document.createElement('div');
         hint.className = 'sta-log-item sta-hint';
@@ -351,7 +372,19 @@ export function renderSessionLog(session) {
         if (isUser) {
             body.textContent = m.content;
         } else if (m.kind === 'ops') {
-            body.textContent = m.content;
+            // 一轮里可能动了十几样东西：按行拆开一条一行，刷新后仍看得出"这轮到底改了什么"
+            const lines = String(m.content || '').split('\n').map(x => x.trim()).filter(Boolean);
+            if (lines.length <= 1) {
+                body.textContent = lines[0] || '';
+            } else {
+                body.textContent = '';
+                for (const line of lines) {
+                    const row = document.createElement('div');
+                    row.className = 'sta-ops-line';
+                    row.textContent = '· ' + line;
+                    body.appendChild(row);
+                }
+            }
         } else {
             const { body: text, calls } = stripToolCalls(m.content);
             body.textContent = text || `（调用了 ${calls} 个工具）`;
