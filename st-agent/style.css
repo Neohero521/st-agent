@@ -342,6 +342,38 @@
 
 .sta-hint { margin-top: 10px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.06); font-size: 11px; color: var(--sta-muted); }
 
+/* 输出上限：说明文字 + 快捷档位 */
+.sta-field-tip {
+    margin-top: 2px;
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: rgba(216, 178, 106, 0.55);
+}
+
+.sta-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+.sta-chip {
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(216, 178, 106, 0.22);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--sta-muted);
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    font-family: inherit;
+    transition: color 0.2s, border-color 0.2s, background 0.2s, transform 0.2s;
+}
+
+.sta-chip:hover { color: var(--sta-gold-2); border-color: rgba(216, 178, 106, 0.5); }
+
+.sta-chip.is-on {
+    color: #1a1409;
+    background: linear-gradient(135deg, var(--sta-gold-2), var(--sta-gold));
+    border-color: transparent;
+    box-shadow: 0 4px 12px rgba(216, 178, 106, 0.22);
+}
+
 /* ---------- v1.10：风险徽标 / 计划卡 / 思考行 / 流式光标 ---------- */
 
 .sta-risk-badge {
