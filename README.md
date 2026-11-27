@@ -12,17 +12,17 @@
 https://github.com/Neohero521/st-agent
 ```
 
-仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `adv-tools.js` / `adv-tools-v14.js` / `adv-tools-v15.js` / `style.css` 均在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
+仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `adv-tools.js` / `adv-tools-v14.js` / `adv-tools-v15.js` / `adv-tools-v16.js` / `style.css` 均在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
 
 **方式二：手动复制文件**
 
-把仓库根目录的 `manifest.json`、`index.js`、`tools.js`、`adv-tools.js`、`adv-tools-v14.js`、`adv-tools-v15.js`、`style.css` 放进
+把仓库根目录的 `manifest.json`、`index.js`、`tools.js`、`adv-tools.js`、`adv-tools-v14.js`、`adv-tools-v15.js`、`adv-tools-v16.js`、`style.css` 放进
 
 ```
 <酒馆根目录>/data/<你的用户名>/extensions/st-agent/
 ```
 
-没有目录就自己建。`tools.js` / `adv-tools.js` 必须一起放（被 `index.js` import）；`adv-tools-v14.js` / `adv-tools-v15.js` 可选，缺了只是少对应工具，不会报错。刷新页面即可。
+没有目录就自己建。`tools.js` / `adv-tools.js` 必须一起放（被 `index.js` import）；`adv-tools-v14.js` / `adv-tools-v15.js` / `adv-tools-v16.js` 可选，缺了只是少对应工具，不会报错。刷新页面即可。
 
 **方式三：一条命令（本目录 / zip 版）**
 
@@ -212,6 +212,16 @@ automation.list {}
 
 `chat.recent` 走 `/api/chats/recent`，一次列出所有角色（含群聊）最近改动的聊天档并带楼层数与最后一条预览——找「最近玩过哪几档」不用先选角色。`msg.trigger` / `msg.continue` 是对 `/trigger` 与 `/continue` 的封装（会消耗额度）。
 
+## 酒馆助手直连层（v1.6）
+
+工具数 104 → 116。装了「酒馆助手」(JS-Slash-Runner 4.x) 之后多出 12 个工具，补上原生扩展够不到的三块：**预设提示词的逐条改写**、**世界书绑定关系**、**楼层重排与渲染态文本**。
+
+`th.status` `preset.prompts` `preset.promptEdit` `preset.promptAdd` `preset.promptRemove` `preset.promptOrder` `lore.bind` `lore.settings` `msg.rotate` `msg.render` `import.raw` `gen.models`
+
+一句话说明价值：酒馆的 `PromptManager`、`rotateChatMessages`、世界书的 `charLore` / `chat_metadata` 绑定，全都不在 `getContext()` 里；酒馆助手把它们包了出来，这一层再把它们交到 Agent 手上。没有酒馆助手时这 12 个工具保留在列表里但会明确报错，其余 104 个照常工作。
+
+装酒馆助手有两个硬坑（本轮实测踩出来的，写在 `docs/v1.6-tavern-helper.md`）：必须放 `extensions/` 的直接子目录（不是 `third-party/`），且 `lib/` 目录不能漏——漏了会 `Failed to fetch dynamically imported module`，控制台只有一串 404，`TavernHelper` 永远是 `undefined`。
+
 ## 可选增强：磁盘桥接
 
 上面这些已经覆盖「酒馆内部文件」的全部 CRUD。如果你还想要**任意路径读写、grep 整个装包、跑 shell 命令**，再装 `st-agent-bridge`（服务端插件）：
@@ -250,7 +260,7 @@ automation.list {}
 酒馆开了 CSRF 保护时，扩展用的是酒馆自己的请求封装，正常不会触发；如果你手动改过 `request.js` 或用了反向代理改写，需要放行。
 
 **想确认装了几个工具**
-F12 执行 `STAgent.tools.length`：基础 104（进阶/自主/自动化/深改/自动化链五层），装桥接是 113。
+F12 执行 `STAgent.tools.length`：基础 116（进阶/自主/自动化/深改/自动化链/酒馆助手六层），装桥接是 125。
 
 ## 开发
 
@@ -263,7 +273,7 @@ STAgent.run('列出所有世界书')
 
 加工具三种方式：
 
-1. **新开一个 `adv-tools-vN.js`，导出 `TOOLS` 数组**（推荐，不用改任何现有文件；v14 / v15 / … v19 都已被探针预置）
+1. **新开一个 `adv-tools-vN.js`，导出 `TOOLS` 数组**（推荐，不用改任何现有文件；v14 / v15 / v16 … v19 都已被探针预置）
 2. `adv-tools.js` 里的 `ADV_TOOLS` 直接加一项
 3. `tools.js` 里的 `ST_TOOLS`（酒馆内）或 `BRIDGE_TOOLS`（需桥接）
 
@@ -277,3 +287,4 @@ STAgent.run('列出所有世界书')
 - `theme.list` 只能读主题名，切换主题仍要改 `powerUserSettings.theme` 并刷新（酒馆没暴露 `applyTheme`）
 - 桥接的 `exec` 是给高级用户开的口子，默认建议只开读写
 - 从 URL 安装后目录里会多出 `install.sh`、`README.md`、`st-agent-bridge/` 等文件，它们不参与运行；后续 `git pull` 可原地升级扩展本体
+- v1.6 这一层依赖「酒馆助手」在线；它没装时 12 个 `th/preset/lore/msg.render/import/gen.models` 工具会报错，属预期
