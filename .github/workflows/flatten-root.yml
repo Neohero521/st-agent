@@ -1,0 +1,65 @@
+name: flatten-to-root
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  flatten:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message || '', '[flat]')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Move extension files to repo root
+        run: |
+          set -e
+          shopt -s dotglob
+          if [ -d st-agent ]; then
+            for f in st-agent/*; do
+              base=$(basename "$f")
+              if [ -e "$base" ]; then
+                echo "skip existing: $base"
+                continue
+              fi
+              git mv "$f" "$base"
+            done
+            rmdir st-agent 2>/dev/null || true
+          fi
+          if [ -f style.css ] && ! grep -q 'sta-ver' style.css; then
+            cat >> style.css <<'CSSEOF'
+
+.sta-ver {
+    margin-left: auto;
+    padding: 1px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--sta-line);
+    color: var(--sta-muted);
+    font-size: 10px;
+    letter-spacing: .2px;
+    line-height: 1.5;
+    opacity: .9;
+}
+
+.sta-selfcheck-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+.sta-selfcheck-out {
+    margin: -2px 0 10px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px dashed var(--sta-line);
+    color: var(--sta-muted);
+    font-size: 11px;
+    line-height: 1.6;
+    word-break: break-all;
+}
+CSSEOF
+          fi
+          git config user.name 'st-agent-bot'
+          git config user.email 'bot@users.noreply.github.com'
+          git add -A
+          git commit -m 'chore: flatten repo to extension root [flat]' || echo 'nothing to commit'
+          git push origin HEAD:main
