@@ -12,17 +12,17 @@
 https://github.com/Neohero521/st-agent
 ```
 
-仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `adv-tools.js` / `adv-tools-v14.js` … `adv-tools-v17.js` / `style.css` 全在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
+仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `adv-tools.js` / `adv-tools-v14.js` … `adv-tools-v18.js` / `style.css` 全在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
 
 **方式二：手动复制文件**
 
-把仓库根目录的**全部 `.js` 与 `.css`**（`manifest.json`、`index.js`、`tools.js`、`adv-tools.js`、`adv-tools-v14.js`…`adv-tools-v17.js`、`style.css`）放进
+把仓库根目录的**全部 `.js` 与 `.css`**（`manifest.json`、`index.js`、`tools.js`、`adv-tools.js`、`adv-tools-v14.js`…`adv-tools-v18.js`、`style.css`）放进
 
 ```
 <酒馆根目录>/data/<你的用户名>/extensions/st-agent/
 ```
 
-没有目录就自己建。`tools.js` / `adv-tools.js` 必须一起放（被 `index.js` import）；`adv-tools-v*.js` 是**按文件名动态 import** 的，缺哪个就少哪一层工具（v14 深改、v15 自动化链、v16 酒馆助手、v17 群聊体检），不会报错但会静默少功能——所以别只拷前五个文件，整目录一起拷。刷新页面即可。
+没有目录就自己建。`tools.js` / `adv-tools.js` 必须一起放（被 `index.js` import）；`adv-tools-v*.js` 是**按文件名动态 import** 的，缺哪个就少哪一层工具（v14 深改、v15 自动化链、v16 酒馆助手、v17 群聊体检、v18 安全网与磁盘），不会报错但会静默少功能——所以别只拷前五个文件，整目录一起拷。刷新页面即可。
 
 **方式三：一条命令（本目录 / zip 版）**
 
@@ -69,7 +69,7 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 条目级增改（只传要改的字段，新条目自动补全酒馆要求的默认字段），并且走 `loadWorldInfo` / `saveWorldInfo`，编辑器缓存同步。
 
 **提示词注入**：`inject.set` `inject.clear` `inject.list`
-把一段常驻文本插进提示词（`in_prompt` / `in_chat` + depth / `before_prompt`，可选 role 与是否允许世界书扫描）。等于让 Agent 给你加“临时世界书”。
+把一段常驻文本插进提示词（`in_prompt` / `in_chat` + depth / `before_prompt`，可选 role 是否允许世界书扫描）。等于让 Agent 给你加“临时世界书”。
 
 **正则**：`regex.test` `regex.setEnabled`
 拿真实正则对任意文本试跑看替换结果，错了不会弄脏聊天；也能一键启停全局/角色正则。
@@ -238,6 +238,24 @@ automation.list {}
 - `getContext()` 里**没有** `createNewWorldInfo`。建世界书只能 `saveWorldInfo(name, {entries:{}}, true)` 先落空本占位再写内容，直接调用前端创建函数会 `is not a function`。
 - `ext.maintain` 必须先探 `remote_url`：`/api/extensions/update` 只会 `git pull`，手动拷贝进目录的扩展必然 500；而 `reinstallExtension` 的逻辑是「先 `delete` 再按 `remote_url` 装回」——非 git 扩展的 `remote_url` 是空，等于**删掉就装不回来**。所以非 git 环境下 reinstall 被工具直接拒绝，只回结构化原因。
 
+## 安全网与磁盘管家（v1.8）
+
+工具数 125 → 139。这一版不是凭感觉加的：把 `src/endpoints/` **46 个模块**的路由全列出来，跟已有 125 个工具做差集，剩下的空白恰好是 Agent 最缺的两样东西——**能退回，和能清理**。
+
+`snap.list` `snap.make` `snap.load` `snap.restore` `backup.chats` `backup.delete` `maid.report` `maid.delete` `vec.list` `vec.query` `vec.insert` `vec.purge` `stats.get` `stats.recreate`
+
+- **设置快照**：`snap.make` 一条命令给当前 `settings.json` 打快照（实测 9 → 10 张，每张 45 KB），`snap.restore` 整份覆盖回去（要 `confirm: true`，且必须刷新页面）。批量改设置、装扩展、换主题之前先打一张——这是唯一能整套救回来的路。`snap.load` 只回结构不回全文（settings.json 常有几 MB）。
+- **data-maid 磁盘清理**：`maid.report` 真扫磁盘，列九类孤立文件（没人认领的聊天 / 图片 / 附件 / 缩略图 / 旧聊天备份 / 旧设置快照）；`maid.delete` 拿报告里的 `token` + 具体 `hash` 删，服务端会再 `isPathUnderParent` 校验一次归属。**工具层故意不支持"全删"**，模型没法手滑清空磁盘。
+- **聊天备份**：`backup.chats` 列酒馆自动打的 `backups/*.jsonl`（体积、楼层数、最后一条文本），`backup.delete` 删单个。
+- **向量库**：`vec.list` / `vec.query` / `vec.insert` / `vec.purge` —— 酒馆记忆检索的底层。`vec.list` 是零风险探针（只读 hash 表，不触发 embedding），先看这档有没有索引，再决定要不要 `query`。
+- **统计**：`stats.get` 按消息量排序（`stats.recreate` 从磁盘聊天文件重建）。
+
+**实测数据**：`maid.report` 在一个"很干净"的测试环境里仍有 `total 14 / 428 KB` —— 全是酒馆自己攒的 settings 快照与 chat 备份，这些从来不会自动清。所以「磁盘怎么越来越大」这个问题的答案，多半就在这里。
+
+**这一版踩的两个坑**：`getChatInfo` 的字段不是 `mes_count`，是 `chat_items`（楼层）+ `mes`（最后一条正文）+ `last_mes`（mtime 毫秒数）+ `file_size`（格式化字符串如 `400B`）；`/api/stats/get` 会把 `timestamp` 混进角色表（值是数字），必须按「value 是对象」过滤，否则统计里会多出一个叫 timestamp 的"角色"。
+
+**没做的**：世界书改名（JSR 的 `renameWorldbook` 在源码里是**注释掉的**，`worldbook.ts:416`；原生 `/api/worldinfo/*` 也没有 rename，硬做会丢绑定）；`backup.chat/download` 是 `response.download` 浏览器下载，前端 fetch 拿不到内容；`secrets/*` 需要 `config.yaml` 的 `allowKeysExposure: true`，默认关闭，整块跳过。
+
 ## 可选增强：磁盘桥接
 
 上面这些已经覆盖「酒馆内部文件」的全部 CRUD。如果你还想要**任意路径读写、grep 整个装包、跑 shell 命令**，再装 `st-agent-bridge`（服务端插件）：
@@ -276,7 +294,7 @@ automation.list {}
 酒馆开了 CSRF 保护时，扩展用的是酒馆自己的请求封装，正常不会触发；如果你手动改过 `request.js` 或用了反向代理改写，需要放行。
 
 **想确认装了几个工具**
-F12 执行 `STAgent.tools.length`：基础 125（进阶/自主/自动化/深改/自动化链/酒馆助手/群聊体检七层），装桥接是 134。
+F12 执行 `STAgent.tools.length`：基础 139（进阶/自主/自动化/深改/自动化链/酒馆助手/群聊体检/安全网八层），装桥接是 148。
 
 ## 开发
 
@@ -306,3 +324,5 @@ STAgent.run('列出所有世界书')
 - v1.6 这一层依赖「酒馆助手」在线；它没装时 12 个 `th/preset/lore/msg.render/import/gen.models` 工具会报错，属预期
 - v1.7 的 `audit.run` 会逐张卡查聊天档（`/api/characters/chats`），几百张卡时会慢几秒；用 `chatSample` 限制最近聊天采样量即可
 - v1.7 的 `ext.maintain` 只对 git 安装的扩展有效；手动拷贝的目录会被明确拒绝（原因见上一节）
+- v1.8 的 `snap.restore` 覆盖完必须刷新页面；`maid.report` 会遍历用户目录，文件极多时要几秒
+- v1.8 的 `vec.*` 依赖酒馆配好的向量源；没配时 `vec.list` 返回 0，`vec.query` 才会真正报错（这是有意的，先探再查）
