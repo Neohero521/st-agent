@@ -1,0 +1,32 @@
+name: sync-extension-root
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message || '', '[sync]')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply v1.13.9 package to extension root
+        run: |
+          set -e
+          curl -fL --retry 3 --retry-delay 2 -o /tmp/pkg.zip "https://aka.doubaocdn.com/s/XEUlPqzKIb"
+          ls -l /tmp/pkg.zip
+          mkdir -p /tmp/pkg && unzip -o -q /tmp/pkg.zip -d /tmp/pkg
+          ls /tmp/pkg | head
+          cp -fR /tmp/pkg/st-agent/. .
+          rm -rf st-agent
+          git rm -q -r --cached st-agent 2>/dev/null || true
+          if [ -f .github/workflows/flatten-root.yml ]; then git rm -q .github/workflows/flatten-root.yml; fi
+          git config user.name 'st-agent-bot'
+          git config user.email 'bot@users.noreply.github.com'
+          git add -A
+          git commit -m 'chore: sync extension root from v1.13.9 package [sync]' || echo 'nothing to commit'
+          git push origin HEAD:main
