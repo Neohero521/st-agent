@@ -173,12 +173,18 @@ ${toolsPrompt()}${advToolsPrompt()}
 4. 模型侧输出契约：正文末尾先给 \`<UpdateVariable>\`（内含 \`<Analysis>\` 与 \`<JSONPatch>\`），整条回复最后一行是 \`<StatusPlaceHolderImpl/>\`。数值增减用 delta，绝对赋值用 replace，新键/新元素用 insert，删用 remove。
 5. 写完用 world.get 抽查 2～3 条的 position / constant / enabled 是否与规范一致；结论里提醒用户：MVU 需要装 MagVarUpdate 并注册 zod schema 脚本，否则条目只是静态文本。
 
+6. 完整的 MVU 是 8 条：第 1 条是 zod 变量结构脚本，用 \`mvu.schema\` 写进角色卡的「酒馆助手」脚本位（id=mvu-schema、name=变量结构），不要写成世界书条目——放错位置只会灌进提示词，变量系统完全不生效；第 8 条是状态栏 HTML + 两条正则（[美化]MVU状态栏 负责把占位符渲染成面板、[不发送]隐藏状态栏标记 负责发给模型前清掉占位符），用 \`mvu.statusbar\` 一并写。
+7. schema 的默认值一律中性：数字 \`prefault(0)\`，字符串/布尔/对象/数组 \`prefault(null)\` 且必须先 \`.nullable()\`（\`z.string().nullable().prefault(null)\`）——漏了会在开局初始化时报「期望 string，实际接收 空值(null)」。\`z\` 在酒馆助手 iframe 里是全局，绝不要写 \`import { z } from 'zod'\`。
+
 ## EJS 多阶段人设（用户提到 EJS / 阶段 / 多阶段人设时启用）
 1. 结构固定：1 个控制器（启用、position=1、depth=0、constant=true，只读变量 + getwi 派发）+ N 个阶段条目（禁用、只放该阶段差异正文，不含 <% %>）。
 2. 用 \`ejs.build\` 编译，参数是 var_path（不带 stat_data. 前缀）、defaults、branches（[{max, stage, body}] 按上界从低到高）。工具会生成 typeof 守卫 + if / else if / else 链，最后一档自动当兜底；不要手写控制器代码去赌语法。
 3. 阶段正文只写"和普通人物生境相比变了什么"，不要把基础人设复制进每一档；条目命名统一前缀（角色名_阶段01_xxx），方便 getwi 对上。
 4. 交付前跑 \`ejs.audit\`：检查 getvar 路径前缀、typeof 守卫、getwi 目标条目是否存在、阶段条目是否被误设启用、控制器是否被误禁。
 5. 给用户展示 EJS 源码时，用 \`\`\`ejs 代码块外面再包 \`<#escape-ejs>…</#escape-ejs>\`，防止酒馆当场执行这段代码；写进条目时工具会自动剥掉这层包裹。
+
+6. EJS 的行为靠装饰器开关，只认这 15 个：@@preprocessing / @@if / @@iframe / @@generate_before / @@generate_after / @@render_before / @@render_after / @@activate / @@dont_activate / @@private / @@initial_variables / @@always_enabled / @@only_preload / @@dont_preload / @@message_formatting。写了别的 @@xxx 会被当普通正文。\`@@private\` 会自动包一层作用域，此时内部要用 let/const，不能和「typeof 守卫 + var」混用。
+7. EJS 依赖用户装了 ST-Prompt-Template 扩展，否则 \`<% %>\` 会原样显示成源码。结论里要提醒这一点。
 
 ## 行为准则
 1. 先 st.state 了解当前角色 / 聊天 / 世界书；名字不确定时先 char.list / world.list。

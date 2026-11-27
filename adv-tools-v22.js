@@ -10,6 +10,7 @@
  */
 
 import { loadBook, setEntry, getEntries, entryFields } from './adv-lib-world.js';
+import { c } from './adv-lib-core.js';
 
 /* ------------------------------ 固定模板 ------------------------------ */
 
@@ -198,6 +199,51 @@ async function writeEntry(book, comment, content, cfg) {
     return await setEntry(args);
 }
 
+/* ------------------------------ zod 变量结构脚本（第1条） ------------------------------ */
+
+/**
+ * 写卡器 v329.59 的 normalizeMvuSchemaSource 精简版：把模型写的 zod 源码变成"能直接跑"的形式。
+ * 它踩过的三个坑：① import { z } from 'zod' 在酒馆助手 iframe 里会崩（z 是全局）；
+ * ② 只写 schema 不注册 = 变量系统形同虚设；③ .prefault(null) 前不 .nullable() 会在开局初始化时报类型错。
+ */
+function normalizeSchema(src) {
+    let out = String(src || '');
+    out = out.replace(/^\s*```[a-z]*\s*\r?\n([\s\S]*?)\r?\n```\s*$/i, '$1');
+    out = out.replace(/^\s*import\s*\{[^}]*\bz\b[^}]*\}\s*from\s*['"][^'"]*['"];?[ \t]*$/gm, '');
+    out = out.replace(/const\s+[A-Za-z_$][\w$]*\s*=\s*z\.object/, 'export const Schema = z.object');
+    if (!/mvu_zod\.js/.test(out)) {
+        out = "import { registerMvuSchema } from 'https://testingcf.jsdelivr.net/gh/StageDog/tavern_resource/dist/util/mvu_zod.js';\n\n" + out.replace(/^\s+/, '');
+    }
+    if (!/registerMvuSchema\s*\(\s*Schema\s*\)/.test(out)) {
+        out += '\n\n$(() => { registerMvuSchema(Schema); });';
+    } else if (!/\$\(\s*\(\s*\)\s*=>\s*\{[\s\S]*?registerMvuSchema/.test(out)) {
+        out = out.replace(/^\s*registerMvuSchema\s*\(\s*Schema\s*\)\s*;?[ \t]*$/m, '$(() => { registerMvuSchema(Schema); });');
+    }
+    // .prefault(null) 前面补 .nullable()：对象字面量那一档单独处理（逐链扫描遇到 } 会跳过）
+    out = out.replace(/\}\s*\)\s*\.prefault\(\s*null\s*\)/g, '}).nullable().prefault(null)');
+    let from = 0;
+    let guard = 0;
+    while (from < out.length && guard++ < 800) {
+        const m = /\.prefault\s*\(\s*null\s*\)/.exec(out.slice(from));
+        if (!m) break;
+        const idx = from + m.index;
+        const cs = out.slice(0, idx).lastIndexOf('z.');
+        let insert = false;
+        if (cs >= 0) {
+            const chain = out.slice(cs, idx);
+            insert = /^z\.[A-Za-z_$]/.test(chain) && chain.length < 240 && chain.indexOf(';') < 0
+                && !/\.nullable\s*\(/.test(chain) && chain.indexOf('}') < 0;
+        }
+        if (insert) {
+            out = out.slice(0, idx) + '.nullable()' + out.slice(idx);
+            from = idx + 11 + m[0].length;
+        } else {
+            from = idx + m[0].length;
+        }
+    }
+    return out.replace(/\n{3,}/g, '\n\n').trim() + '\n';
+}
+
 /* ------------------------------ 工具 ------------------------------ */
 
 export const TOOLS = [
@@ -383,6 +429,78 @@ export const TOOLS = [
                 if (keys.length) notes.push(`「${e.comment}」读取路径：${keys.join('、')}`);
             }
             return { ok: true, book: a.book, entries: all.length, issues, paths: notes, ok_count: issues.length === 0 };
+        },
+    },
+    {
+        name: 'mvu.schema',
+        kind: 'write',
+        desc: '把 zod 变量结构脚本写进角色卡的「酒馆助手」脚本位（id=mvu-schema、name=变量结构）。自动剥掉 import { z } from "zod"（z 在酒馆助手 iframe 里是全局，裸 import 会崩）、补 mvu_zod 导入头、把 export const Schema = z.object 规范化、给 .prefault(null) 补 .nullable()、补 $(() => registerMvuSchema(Schema)) 注册尾。注意 schema 必须放脚本位，写成世界书条目会灌进提示词且完全不生效。',
+        params: {
+            card: 'string 头像文件名，默认当前角色',
+            schema: 'string zod 源码（以 z.object({...}) 链为主）',
+        },
+        run: async a => {
+            const ctx = c();
+            const av = a.card || ctx.characterId;
+            const local = (ctx.characters || []).find(x => x.avatar === av);
+            if (!local) throw new Error(`找不到角色卡「${av}」`);
+            if (!a.schema || !String(a.schema).trim()) throw new Error('mvu.schema 需要 schema 源码');
+            const code = normalizeSchema(a.schema);
+            if (!/z\.object/.test(code)) throw new Error('schema 里没有 z.object：确认这是 zod 结构定义');
+            const data = local.data || {};
+            const ext = (data.extensions = data.extensions || {});
+            const th = (ext.tavern_helper = ext.tavern_helper || {});
+            const scripts = Array.isArray(th.scripts) ? th.scripts.slice() : [];
+            const item = { type: 'script', enabled: true, name: '变量结构', id: 'mvu-schema', content: code, info: '', button: { enabled: true, buttons: [] }, data: {} };
+            const idx = scripts.findIndex(s => s && (s.id === 'mvu-schema' || /变量结构/.test(String(s.name || ''))));
+            if (idx >= 0) scripts[idx] = Object.assign({}, scripts[idx], item);
+            else scripts.push(item);
+            const nested = { extensions: { tavern_helper: { scripts } } };
+            const body = { avatar: av, data: Object.assign({}, data, nested), extensions: nested.extensions };
+            const res = await fetch('/api/characters/merge-attributes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            if (!res.ok) throw new Error(`写入失败：HTTP ${res.status}`);
+            Object.assign(local, { data: Object.assign({}, data, nested), extensions: nested.extensions });
+            ctx.saveSettingsDebounced?.();
+            return { ok: true, avatar: av, id: 'mvu-schema', bytes: code.length, created: idx < 0, registered: /registerMvuSchema\s*\(\s*Schema\s*\)/.test(code) };
+        },
+    },
+    {
+        name: 'mvu.statusbar',
+        kind: 'write',
+        desc: '写 MVU 状态栏这一套：世界书「状态栏」条目（position=2、depth=2、order=35，内容为完整 HTML，读 stat_data 用 getvar）+ 两条正则——[美化]MVU状态栏（把 <StatusPlaceHolderImpl/> 换成这段 HTML，只影响显示）+ [不发送]隐藏状态栏标记（发给模型前把占位符清掉，免得它照着占位符编造）。',
+        params: {
+            book: 'string 世界书名',
+            html: 'string 状态栏 HTML（必须含 <StatusPlaceHolderImpl/> 占位符）',
+            enable_hide: 'boolean 可选，默认 true，创建「不发送」正则',
+        },
+        run: async a => {
+            if (!a.book) throw new Error('mvu.statusbar 需要 book');
+            const html = String(a.html || '').trim();
+            if (!html) throw new Error('mvu.statusbar 需要 html');
+            if (!/StatusPlaceHolderImpl/.test(html)) throw new Error('状态栏 HTML 里必须保留 <StatusPlaceHolderImpl/> 占位符');
+            const spec = { position: 2, depth: 2, order: 35, constant: false, enabled: true };
+            const written = await writeEntry(a.book, '状态栏', html, spec);
+            const ctx = c();
+            const list = ctx.extensionSettings.regex || (ctx.extensionSettings.regex = []);
+            const upsertRx = (id, name, find, rep, opts) => {
+                let item = list.find(r => r.id === id);
+                if (!item) {
+                    item = { id, scriptName: name, findRegex: '', replaceString: '', placement: ['AI_OUTPUT'], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: true, substituteRegex: 2 };
+                    list.push(item);
+                }
+                Object.assign(item, { scriptName: name, findRegex: find, replaceString: rep }, opts || {});
+                return item;
+            };
+            upsertRx('mvu-status-bar', '[美化]MVU状态栏', '/<StatusPlaceHolderImpl\\/>/g', html, { markdownOnly: true, promptOnly: false, disabled: false });
+            if (a.enable_hide !== false) {
+                upsertRx('mvu-status-hide', '[不发送]隐藏状态栏标记', '/<StatusPlaceHolderImpl\\/>/g', '', { markdownOnly: false, promptOnly: true, disabled: false });
+            }
+            ctx.saveSettingsDebounced?.();
+            return { ok: true, book: a.book, entry_uid: written.uid, regex: a.enable_hide !== false ? '[美化]MVU状态栏 + [不发送]隐藏状态栏标记' : '[美化]MVU状态栏', bytes: html.length };
         },
     },
 ];
