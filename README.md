@@ -12,17 +12,17 @@
 https://github.com/Neohero521/st-agent
 ```
 
-仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `adv-tools.js` / `adv-tools-v14.js` / `style.css` 均在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
+仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `adv-tools.js` / `adv-tools-v14.js` / `adv-tools-v15.js` / `style.css` 均在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
 
 **方式二：手动复制文件**
 
-把仓库根目录的 `manifest.json`、`index.js`、`tools.js`、`adv-tools.js`、`adv-tools-v14.js`、`style.css` 放进
+把仓库根目录的 `manifest.json`、`index.js`、`tools.js`、`adv-tools.js`、`adv-tools-v14.js`、`adv-tools-v15.js`、`style.css` 放进
 
 ```
 <酒馆根目录>/data/<你的用户名>/extensions/st-agent/
 ```
 
-没有目录就自己建。`tools.js` / `adv-tools.js` 必须一起放（被 `index.js` import）；`adv-tools-v14.js` 可选，缺了只是少 13 个工具，不会报错。刷新页面即可。
+没有目录就自己建。`tools.js` / `adv-tools.js` 必须一起放（被 `index.js` import）；`adv-tools-v14.js` / `adv-tools-v15.js` 可选，缺了只是少对应工具，不会报错。刷新页面即可。
 
 **方式三：一条命令（本目录 / zip 版）**
 
@@ -170,6 +170,48 @@ char.bulkMerge { avatars: [], fields: { data: { extensions: { talkativeness: "0.
 
 **架构改动（值得知道）**：`tools.js` 末尾加了**探针式加载器**——新工具模块按 `adv-tools-vN` 命名丢进扩展目录就会自动挂进 `ADV_TOOLS`，不必再改 `tools.js` / `adv-tools.js` / `index.js`。v1.4 的 13 个工具都在 `adv-tools-v14.js` 里，是这个机制的第一次使用；以后每版只需新增一个小文件。
 
+## 世界书驱动的自动化（v1.5）
+
+工具数 93 → 104。这一层把酒馆自己的自动化引擎接了出来：**世界书条目命中 → 按 automationId 找按钮 → 执行 STscript**。
+
+**先讲清机制**（`public/scripts/extensions/quick-reply/src/AutoExecuteHandler.js`）
+
+`handleWIActivation(entries)` 拿到本次被激活的世界书条目，取它们的 `automationId`，再去**已挂载**的 QR 组里找 `automationId` 相同的按钮并逐个执行。有两条容易踩的隐性规则：
+
+- 按钮所在组必须在 global / chat / character 三层配置里**已挂载**，否则写了 id 也永远不会触发（这就是 `dormant_buttons`）
+- 世界书条目的字段是 `entry.automationId`（UI 里显示成 `automation_id`），必须写在条目上，不是写在 `extensions` 里
+
+**配对诊断**：`automation.list` `automation.run` `lb.setAutomation`
+
+`automation.list` 把「按钮的 id」和「世界书条目的 id」拉到同一张表对照，直接告诉你哪边没配上：
+
+```
+automation.list {}
+→ automation_ids: 1, active_buttons: 0, entries: 1
+   dormant_buttons: [{ set: "AutoChain", label: "auto-echo", scope: "unmounted" }]
+   unmatched_ids: ["v15test"]        ← 有一边没配对
+```
+
+`lb.setAutomation` 给条目写 id（传空串即清除）；`automation.run` 立即按 id 触发一次，等于模拟世界书命中，返回每个按钮的 STscript 管道结果——不用真等世界书触发就能验证整条链。
+
+实测过的完整闭环（并在测试环境清理干净）：建组 → 加按钮（`automation_id: "v15test"`, `message: "/echo ..."`）→ 给 Eldoria 条目写 id → 未挂载时 `automation.run` 报「有 1 个同 id 按钮但未挂载（AutoChain/auto-echo），先用 qr.mount 挂上」→ 挂上后 `automation.run` 返回 `"v15-updated"`。
+
+**QR 组与按钮的完整管理**：`qr.update` `qr.mount` `qr.deleteSet` `qr.export` `qr.context`
+
+- `qr.update` 原位改按钮（message / 图标 / 标题 / 显隐 / automation_id / 七个钩子），不用删了重建
+- `qr.mount` 挂到全局或当前聊天、`target: "none"` 全卸、`visible: false` 只挂不显示（仍能被 automationId 命中）
+- `qr.context` 把另一个组挂成按钮的右键子菜单（`createContextItem`）
+- `qr.export` 导出整组结构化 JSON，方便备份 / 迁移到别的机器
+
+**修掉的两个真实坑**
+
+- `toggleGlobalSet / toggleChatSet` 的语义是「**有则删、无则加**」，不是"确保可见"。第一版拿它当开关，结果把本来挂着的组卸掉了，`after.global` 从 true 变 false —— 现在统一走「先移除（若已挂）再按指定可见性添加」
+- `qr.contextList` 不是 `contextLinks`，字段名写错会导致读数永远是空数组
+
+**跨角色检索与生成**：`chat.recent` `msg.trigger` `msg.continue`
+
+`chat.recent` 走 `/api/chats/recent`，一次列出所有角色（含群聊）最近改动的聊天档并带楼层数与最后一条预览——找「最近玩过哪几档」不用先选角色。`msg.trigger` / `msg.continue` 是对 `/trigger` 与 `/continue` 的封装（会消耗额度）。
+
 ## 可选增强：磁盘桥接
 
 上面这些已经覆盖「酒馆内部文件」的全部 CRUD。如果你还想要**任意路径读写、grep 整个装包、跑 shell 命令**，再装 `st-agent-bridge`（服务端插件）：
@@ -208,7 +250,7 @@ char.bulkMerge { avatars: [], fields: { data: { extensions: { talkativeness: "0.
 酒馆开了 CSRF 保护时，扩展用的是酒馆自己的请求封装，正常不会触发；如果你手动改过 `request.js` 或用了反向代理改写，需要放行。
 
 **想确认装了几个工具**
-F12 执行 `STAgent.tools.length`：基础 93（进阶/自主/自动化/深改四层），装桥接是 102。
+F12 执行 `STAgent.tools.length`：基础 104（进阶/自主/自动化/深改/自动化链五层），装桥接是 113。
 
 ## 开发
 
