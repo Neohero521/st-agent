@@ -173,13 +173,39 @@ function jsLiteral(v) {
     return JSON.stringify(v);
 }
 
-/** 找一个"核心名"匹配的已有条目：优先精确 comment，其次包含匹配，避免同款条目重复堆积 */
+/** 核心名：循环剥掉外层 [xxx] / <xxx> / 【xxx】 / 《xxx》 前缀，写卡器 _entryCommentCore 口径 */
+function coreName(s) {
+    let x = String(s || '').trim();
+    let prev = null;
+    while (prev !== x) {
+        prev = x;
+        x = x.replace(/^[\[【<《（(][^\]】>》\）)]*[\]】>》\）)]\s*/, '').trim();
+    }
+    return x;
+}
+
+/** 条目名别名：同一逻辑条目的不同叫法（写卡器 has4 同时认「变量列表 / 变量当前状态」） */
+const CORE_ALIAS = { 变量列表: ['变量当前状态'], 占位符提醒: ['占位提醒'] };
+
+/**
+ * 判断一个已有条目是否是 comment 对应的那条。
+ * 必须精确到核心名：早期用 includes 模糊匹配，「状态栏」会吃掉「<状态栏>占位符提醒」，把占位提醒正文覆盖成 HTML，
+ * 条目越写越少、MVU 提示词缺一块 —— 这是写卡器反复强调「同名条目更新而不是重复新建」的原因。
+ */
+function matchEntry(e, comment) {
+    const full = String(e.comment || '').trim();
+    const base = coreName(comment);
+    if (full === comment) return true;
+    if (coreName(full) === base) return true;
+    if ((CORE_ALIAS[base] || []).includes(coreName(full))) return true;
+    if (base === '初始变量') return /^\[initvar\]/i.test(full);
+    if (/占位/.test(base)) return /占位/.test(full) && coreName(full) !== '状态栏';
+    return false;
+}
+
+/** 找一个对应条目：同名就更新，避免同款条目重复堆积 */
 function findEntry(list, comment) {
-    const exact = list.find(e => String(e.comment || '').trim() === comment);
-    if (exact) return exact;
-    const core = comment.replace(/^\[[^\]]*\]/, '').replace(/^<[^>]*>/, '').trim();
-    if (!core) return null;
-    return list.find(e => String(e.comment || '').includes(core)) || null;
+    return list.find(e => matchEntry(e, comment)) || null;
 }
 
 async function writeEntry(book, comment, content, cfg) {
@@ -337,25 +363,31 @@ export const TOOLS = [
             const lines = [];
             lines.push('<%# @qk-unit | 工件=多阶段人设控制器 | 单元=控制器 | 依据=条件表 | 边界=只读变量并派发 | 完成=分支闭合 %>');
             lines.push(`<%_ if (typeof ${vn} === 'undefined') var ${vn} = getvar('stat_data.${varPath}', { defaults: ${lit} }); _%>`);
-            const numeric = typeof a.defaults === 'number' || branches.every(b => typeof b.max === 'number');
-            branches.forEach((b, i) => {
-                if (typeof b.max === 'number' && numeric) {
-                    const kw = i === 0 ? 'if' : 'else if';
-                    lines.push(`<%_ ${kw} (${vn} <= ${b.max}) { _%>`);
-                } else if (typeof b.max === 'string') {
-                    const kw = i === 0 ? 'if' : 'else if';
-                    lines.push(`<%_ ${kw} (${vn} === ${jsLiteral(b.max)}) { _%>`);
-                } else {
-                    lines.push('<%_ } else { _%>');
+            // 条件编译：数值上界走 <=，枚举走 ===，两类可混排；缺 max 的项只当兜底，绝不能生成孤立 else
+            const cmpOf = b => (typeof b.max === 'number' ? '<=' : (typeof b.max === 'string' ? '===' : null));
+            const conds = branches.filter(b => cmpOf(b));
+            const tail = branches.filter(b => !cmpOf(b)).pop() || null;
+            if (!conds.length) {
+                const only = tail || branches[0];
+                lines.push(`<%- await getwi('${only.stage}') %>`);
+                names.push(only.stage);
+            } else {
+                let first = true;
+                for (const b of conds) {
+                    const op = cmpOf(b);
+                    // 第二档起必须自带 } 关闭上一档的块，否则 (cond){ else if 直接语法错
+                    const head = first ? 'if' : '} else if';
+                    lines.push(`<%_ ${head} (${vn} ${op} ${op === '<=' ? b.max : jsLiteral(b.max)}) { _%>`);
+                    first = false;
+                    lines.push(`<%- await getwi('${b.stage}') %>`);
+                    names.push(b.stage);
                 }
-                lines.push(`<%- await getwi('${b.stage}') %>`);
-                names.push(b.stage);
-            });
-            const fb = a.fallback && a.fallback.stage ? a.fallback : branches[branches.length - 1];
-            lines.push('<%_ } else { _%>');
-            lines.push(`<%- await getwi('${fb.stage}') %>`);
-            if (!names.includes(fb.stage)) names.push(fb.stage);
-            lines.push('<%_ } _%>');
+                const fb = a.fallback && a.fallback.stage ? a.fallback : (tail || conds[conds.length - 1]);
+                lines.push('<%_ } else { _%>');
+                lines.push(`<%- await getwi('${fb.stage}') %>`);
+                if (!names.includes(fb.stage)) names.push(fb.stage);
+                lines.push('<%_ } _%>');
+            }
             lines.push('<%# @qk-complete | 工件=多阶段人设控制器 | 已闭合=变量读取,条件覆盖,getwi派发,EJS结构 %>');
             const controller = stripEjsEscape(lines.join('\n'));
 
@@ -405,7 +437,8 @@ export const TOOLS = [
                 const c = String(e.content || '');
                 const cmt = String(e.comment || '');
                 const isCtrl = /\bgetwi\s*\(/.test(c) || /await\s+getwi/.test(c);
-                const isStage = /_阶段\d*_?/.test(cmt);
+                // 阶段条目：阶段01_陌生 / 阶段一 这类命名才判；「X_阶段控制器」不算阶段条目
+                const isStage = !isCtrl && /阶段\s*0?\d|阶段[一二三四五六七八九十]/.test(cmt);
                 if (!isCtrl && !isStage) continue;
                 if (isCtrl) {
                     if (/getvar\(\s*['"]stat_data\./.test(c) === false && /getvar\(/.test(c)) {
@@ -485,6 +518,7 @@ export const TOOLS = [
             const spec = { position: 2, depth: 2, order: 35, constant: false, enabled: true };
             const written = await writeEntry(a.book, '状态栏', html, spec);
             const ctx = c();
+            ctx.extensionSettings = ctx.extensionSettings || {};
             const list = ctx.extensionSettings.regex || (ctx.extensionSettings.regex = []);
             const upsertRx = (id, name, find, rep, opts) => {
                 let item = list.find(r => r.id === id);
@@ -501,6 +535,107 @@ export const TOOLS = [
             }
             ctx.saveSettingsDebounced?.();
             return { ok: true, book: a.book, entry_uid: written.uid, regex: a.enable_hide !== false ? '[美化]MVU状态栏 + [不发送]隐藏状态栏标记' : '[美化]MVU状态栏', bytes: html.length };
+        },
+    },
+    {
+        name: 'mvu.audit',
+        kind: 'read',
+        desc: '按写卡器 v329.59 checkMvu8Entries 的口径验收一本书的 MVU 八条：①-⑦ 条目是否存在（核心名匹配，兼容 [MVU]变量列表 / 变量当前状态 等变体）+ 每条 position/depth/order/constant/enabled 是否合规范 + 内容特征是否齐（变量列表要 format_message_variable::stat_data、占位提醒要 StatusPlaceHolderImpl、InitVar 不能含 {{ 宏）+ ⑧ 状态栏两条正则是否就位 + 第 1 条 zod schema 脚本是否存在且没有裸 import z。返回 missing 清单与可直接照做的修法。写完 MVU 卡后必须跑一次，空 list 才算完成。',
+        params: { book: 'string 世界书名', card: 'string 可选，头像文件名（查 schema 脚本用，默认当前角色）' },
+        run: async a => {
+            if (!a.book) throw new Error('mvu.audit 需要 book');
+            const got = await getEntries({ name: a.book, limit: 500 });
+            const all = got.entries || [];
+            const issues = [];
+            const warnings = [];
+            const found = [];
+            const missing = [];
+            const hitOf = spec => findEntry(all, spec.comment);
+            const dupOf = spec => all.filter(e => matchEntry(e, spec.comment));
+            const FEATURE = {
+                '[InitVar]初始变量': [[/^[\w\u4e00-\u9fa5].*:/m, '缺少 YAML 键值行'], [/stat_data/i, null]],
+                '变量列表': [[/format_message_variable::stat_data/, '缺少 {{format_message_variable::stat_data}} 宏（变量不会显示）']],
+                '<状态栏>占位符提醒': [['StatusPlaceHolderImpl', '缺少 <StatusPlaceHolderImpl/> 占位符']],
+                '状态栏': [['StatusPlaceHolderImpl', '缺少 <StatusPlaceHolderImpl/> 占位符'], [/getvar\s*\(/, '没有 getvar 读取 stat_data，状态栏会是静态死文本']],
+            };
+            for (const spec of MVU_SPEC.slice(0, 6).concat([MVU_SPEC[6]])) {
+                const hit = hitOf(spec);
+                if (!hit) { missing.push(spec.comment); continue; }
+                found.push({ comment: spec.comment, uid: hit.uid, actual: hit.comment });
+                const dupes = dupOf(spec).length;
+                if (dupes > 1) issues.push(`「${spec.comment}」匹配到 ${dupes} 条重复条目：同样内容会被注入多份，先用 world 工具删到 1 条`);
+                const diff = [];
+                if (Number(hit.position) !== spec.position) diff.push(`position ${hit.position}→${spec.position}`);
+                if (Number(hit.depth) !== spec.depth) diff.push(`depth ${hit.depth}→${spec.depth}`);
+                if (Number(hit.order) !== spec.order) diff.push(`order ${hit.order}→${spec.order}`);
+                if (!!hit.constant !== !!spec.constant) diff.push(`constant ${!!hit.constant}→${spec.constant}`);
+                if (!!hit.enabled !== !!spec.enabled) diff.push(`enabled ${!!hit.enabled}→${spec.enabled}`);
+                if (diff.length) issues.push(`「${spec.comment}」配置不合规范：${diff.join('，')}（调 mvu.build 会强制纠正）`);
+                const body = String(hit.content || '');
+                for (const [pat, msg] of (FEATURE[spec.comment] || [])) {
+                    if (!msg) continue;
+                    const ok = pat instanceof RegExp ? pat.test(body) : body.indexOf(pat) >= 0;
+                    if (!ok) issues.push(`「${spec.comment}」${msg}`);
+                }
+                if (spec.comment === '[InitVar]初始变量') {
+                    if (/\{\{/.test(body)) issues.push('「[InitVar]初始变量」含 {{...}} 酒馆宏：初始化时会被替换成乱码，必须删掉');
+                    const nums = [...body.matchAll(/:\s*(-?\d+(?:\.\d+)?)\s*$/gm)].map(m => Number(m[1]).valueOf());
+                    const nonZero = nums.filter(n => n !== 0);
+                    if (nonZero.length) warnings.push(`「[InitVar]初始变量」有 ${nonZero.length} 个非 0 数值（${nonZero.slice(0, 5).join('、')}）：初始值应为中性 0，编造剧情数值会让开局状态失真`);
+                }
+            }
+            // 第 8 条：状态栏显示 / 隐藏两条正则
+            let regIssues = 0;
+            try {
+                const ctx = c();
+                const rx = (ctx.extensionSettings && ctx.extensionSettings.regex) || [];
+                const show = rx.filter(r => /StatusPlaceHolder/.test(String(r.findRegex || '')) && r.markdownOnly === true && r.promptOnly !== true);
+                const hide = rx.filter(r => /StatusPlaceHolder/.test(String(r.findRegex || '')) && r.promptOnly === true);
+                if (!show.length) { issues.push('第8条 缺「[美化]MVU状态栏」正则（markdownOnly=true）：占位符不会被替换成状态栏 HTML'); regIssues++; }
+                if (!hide.length) { warnings.push('缺「[不发送]隐藏状态栏标记」正则（promptOnly=true）：占位符会被发给模型，诱导它抄占位符'); }
+            } catch (e) {
+                warnings.push('读不到扩展正则设置：' + e.message);
+            }
+            // 第 1 条：zod schema 脚本必须存脚本位
+            let schema = { exist: false, bare_import: false, registered: false, name: '' };
+            try {
+                const ctx = c();
+                const av = a.card || ctx.characterId;
+                const ch = (ctx.characters || []).find(x => x.avatar === av);
+                const ext = ((ch || {}).data || {}).extensions || {};
+                const scripts = (ext.tavern_helper || {}).scripts || [];
+                const s = (Array.isArray(scripts) ? scripts : []).find(x => {
+                    const code = String((x || {}).content || '');
+                    return /registerMvuSchema|z\.object/.test(code);
+                });
+                if (s) {
+                    const code = String(s.content || '');
+                    schema = { exist: true, bare_import: /^\s*import\s*\{[^}]*\bz\b[^}]*\}\s*from\s*['"][^'"]*['"]/m.test(code), registered: /registerMvuSchema\s*\(/.test(code), name: String(s.name || s.id || '') };
+                    if (schema.bare_import) issues.push('schema 脚本里有裸 import { z } from "zod"：酒馆助手 iframe 里 z 是全局，这行会让脚本直接崩（用 mvu.schema 重写）');
+                    if (!schema.registered) issues.push('schema 脚本没调 registerMvuSchema(Schema)：变量系统不会接管，条目只是静态文本');
+                } else {
+                    issues.push('第1条 缺 zod 变量结构脚本（必须存角色卡脚本位，不是世界书条目；用 mvu.schema 写）');
+                }
+            } catch (e) {
+                warnings.push('读不到角色卡脚本位：' + e.message);
+            }
+            const okAll = missing.length === 0 && issues.length === 0;
+            return {
+                ok: true,
+                book: a.book,
+                entries: all.length,
+                done: found.map(f => f.actual),
+                missing,
+                issues,
+                warnings,
+                schema,
+                ok_all: okAll,
+                next: okAll ? '八条齐备，可开始写正文' : [
+                    missing.length ? '缺条目：调 mvu.build 一次补齐（会强制纠正配置）' : '',
+                    issues.some(x => /schema/.test(x)) ? 'schema 问题：调 mvu.schema 重写脚本位' : '',
+                    regIssues ? '正则缺失：调 mvu.statusbar 建两条正则' : '',
+                ].filter(Boolean),
+            };
         },
     },
 ];
