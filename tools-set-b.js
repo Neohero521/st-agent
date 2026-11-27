@@ -75,7 +75,7 @@ export const ST_TOOLS_B = [
         params: { name: 'string 世界书名', comment: 'string 条目标题' },
         run: async a => {
             const data = await c().loadWorldInfo(a.name);
-            if (!data) throw new Error(`世界书不存在：${a.name}`);
+            if (!data) throw new Error(`世界书不存在：${a.name || '未指定世界书名'}`);
             const target = Object.entries(data.entries || {}).find(([, e]) => e.comment === a.comment);
             if (!target) throw new Error(`未找到条目：${a.comment}`);
             delete data.entries[target[0]];
