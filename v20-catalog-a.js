@@ -51,7 +51,7 @@ reg('world.deleteEntry', 2, 'world',
     async a => {
         if (!a.name || !a.comment) return { error: '需要 name 与 comment' };
         const data = await c().loadWorldInfo(a.name).catch(() => null);
-        if (!data) return { error: `世界书不存在：${a.name}` };
+        if (!data) return { error: `世界书不存在：${a.name || '未指定世界书名'}` };
         const hit = Object.entries(data.entries || {}).find(([, e]) => e?.comment === a.comment);
         return hit ? { change: 'delete', warnings: [`将删除条目「${a.comment}」`] } : { error: `条目不存在：${a.comment}` };
     });
@@ -79,7 +79,7 @@ reg('world.delete', 3, 'none',
     async a => {
         if (!a.name) return { error: '缺少 name' };
         const data = await c().loadWorldInfo(a.name).catch(() => null);
-        return data ? { change: 'delete', warnings: [`将删除整本世界书「${a.name}」`] } : { error: `世界书不存在：${a.name}` };
+        return data ? { change: 'delete', warnings: [`将删除整本世界书「${a.name}」`] } : { error: `世界书不存在：${a.name || '未指定世界书名'}` };
     });
 
 /* ---- 角色卡 ---- */
@@ -109,7 +109,7 @@ reg('char.delete', 3, 'none',
     a => `角色 ${a.name || '（当前）'}`,
     async a => {
         const ch = findCharacter(a.name);
-        return ch ? { change: 'delete', warnings: [`将删除角色卡「${ch.name}」及其聊天记录`] } : { error: `未找到角色：${a.name}` };
+        return ch ? { change: 'delete', warnings: [`将删除角色卡「${ch.name}」及其聊天记录`] } : { error: `未找到角色：${a.name || '当前没有选中的角色'}` };
     });
 
 /* ---- 聊天 ---- */
