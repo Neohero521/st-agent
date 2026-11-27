@@ -15,7 +15,7 @@ export const ST_TOOLS_A = [
         params: { name: 'string 角色名或头像文件名（如 "Seraphina.png"）' },
         run: async a => {
             const ch = pickCharacter(a.name);
-            if (!ch) throw new Error(`未找到角色：${a.name}`);
+            if (!ch) throw new Error(`未找到角色：${a.name || '当前没有选中的角色'}`);
             const full = await api('/api/characters/get', { avatar_url: ch.avatar });
             return {
                 name: full.name,
@@ -100,7 +100,7 @@ export const ST_TOOLS_A = [
         },
         run: async a => {
             const ch = pickCharacter(a.name);
-            if (!ch) throw new Error(`未找到角色：${a.name}`);
+            if (!ch) throw new Error(`未找到角色：${a.name || '当前没有选中的角色'}`);
 
             const TEXT = ['description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator_notes',
                 'system_prompt', 'post_history_instructions', 'creator', 'character_version', 'creatorcomment'];
@@ -188,7 +188,7 @@ export const ST_TOOLS_A = [
         params: { name: 'string 原角色名或头像', newName: 'string 新名字' },
         run: async a => {
             const ch = pickCharacter(a.name);
-            if (!ch) throw new Error(`未找到角色：${a.name}`);
+            if (!ch) throw new Error(`未找到角色：${a.name || '当前没有选中的角色'}`);
             await api('/api/characters/rename', { avatar_url: ch.avatar, new_name: a.newName });
             await refreshCharacters();
             return { ok: true, from: ch.name, to: a.newName };
@@ -201,7 +201,7 @@ export const ST_TOOLS_A = [
         params: { name: 'string 角色名或头像', deleteChats: 'boolean 是否同时删聊天记录' },
         run: async a => {
             const ch = pickCharacter(a.name);
-            if (!ch) throw new Error(`未找到角色：${a.name}`);
+            if (!ch) throw new Error(`未找到角色：${a.name || '当前没有选中的角色'}`);
             await api('/api/characters/delete', { avatar_url: ch.avatar, delete_chats: !!a.deleteChats });
             await refreshCharacters();
             return { ok: true, deleted: ch.name, chatsDeleted: !!a.deleteChats };
@@ -223,7 +223,7 @@ export const ST_TOOLS_A = [
         params: { name: 'string 世界书名' },
         run: async a => {
             const data = await c().loadWorldInfo(a.name);
-            if (!data) throw new Error(`世界书不存在：${a.name}`);
+            if (!data) throw new Error(`世界书不存在：${a.name || '未指定世界书名'}`);
             return data;
         },
     },
