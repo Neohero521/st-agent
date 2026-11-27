@@ -70,6 +70,17 @@ export function buildPanel() {
                     <input class="sta-maxsteps" type="number" min="1" max="100" />
                 </label>
                 <label class="sta-field">
+                    <span>单次输出上限（token）</span>
+                    <input class="sta-maxtokens" type="number" min="512" max="65536" step="512" />
+                    <span class="sta-field-tip">这条上限来自本插件，不是 API 页的 Max Response Length。太小则长回复会被切在半句，被切会自动续写，但一次写完更顺。</span>
+                    <span class="sta-chips">
+                        <button type="button" class="sta-chip" data-tokens="4096">4k</button>
+                        <button type="button" class="sta-chip" data-tokens="8192">8k</button>
+                        <button type="button" class="sta-chip" data-tokens="16384">16k</button>
+                        <button type="button" class="sta-chip" data-tokens="32768">32k</button>
+                    </span>
+                </label>
+                <label class="sta-field">
                     <span>审批策略</span>
                     <select class="sta-approval-policy">
                         <option value="auto">仅高危操作确认</option>
@@ -130,6 +141,7 @@ export function bindPanel(root) {
     const drawer = root.querySelector('.sta-drawer');
     const profileSel = root.querySelector('.sta-profile');
     const maxSteps = root.querySelector('.sta-maxsteps');
+    const maxTokens = root.querySelector('.sta-maxtokens');
     const policy = root.querySelector('.sta-approval-policy');
     const streamMode = root.querySelector('.sta-stream-mode');
     const usePreset = root.querySelector('.sta-use-preset');
@@ -143,7 +155,7 @@ export function bindPanel(root) {
     const newSess = root.querySelector('.sta-new-session');
     const sessCount = root.querySelector('.sta-sessions-count');
 
-    setCurrentView({ root, panel, log, input, send, stop, status, drawer, profileSel, maxSteps, policy, streamMode, planMode, batchConfirm, regTools, usePreset, sessionsBtn, sessPanel, sessionsList: sessList, sessClose, newSess, sessCount });
+    setCurrentView({ root, panel, log, input, send, stop, status, drawer, profileSel, maxSteps, maxTokens, policy, streamMode, planMode, batchConfirm, regTools, usePreset, sessionsBtn, sessPanel, sessionsList: sessList, sessClose, newSess, sessCount });
 
     root.querySelector('.sta-fab').addEventListener('click', () => togglePanel(true));
     root.querySelector('.sta-close').addEventListener('click', () => togglePanel(false));
@@ -169,6 +181,18 @@ export function bindPanel(root) {
 
     profileSel.addEventListener('change', () => { settings.profileId = profileSel.value; saveSettings(); });
     maxSteps.addEventListener('change', () => { settings.maxSteps = Math.max(1, Number(maxSteps.value) || 20); saveSettings(); });
+    maxTokens.addEventListener('change', () => {
+        settings.maxTokens = Math.min(65536, Math.max(512, Number(maxTokens.value) || 8192));
+        saveSettings();
+        syncSettingsUI();
+    });
+    drawer.querySelectorAll('.sta-chip').forEach(btn => {
+        btn.addEventListener('click', () => {
+            settings.maxTokens = Number(btn.dataset.tokens) || 8192;
+            saveSettings();
+            syncSettingsUI();
+        });
+    });
     policy.addEventListener('change', () => { settings.approval = policy.value; saveSettings(); });
     streamMode.addEventListener('change', () => { settings.streamMode = streamMode.value; saveSettings(); });
     usePreset.addEventListener('change', () => { settings.usePreset = usePreset.checked; saveSettings(); });
