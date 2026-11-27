@@ -12,17 +12,17 @@
 https://github.com/Neohero521/st-agent
 ```
 
-仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `adv-tools.js` / `adv-tools-v14.js` / `adv-tools-v15.js` / `adv-tools-v16.js` / `style.css` 均在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
+仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `adv-tools.js` / `adv-tools-v14.js` … `adv-tools-v17.js` / `style.css` 全在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
 
 **方式二：手动复制文件**
 
-把仓库根目录的 `manifest.json`、`index.js`、`tools.js`、`adv-tools.js`、`adv-tools-v14.js`、`adv-tools-v15.js`、`adv-tools-v16.js`、`style.css` 放进
+把仓库根目录的**全部 `.js` 与 `.css`**（`manifest.json`、`index.js`、`tools.js`、`adv-tools.js`、`adv-tools-v14.js`…`adv-tools-v17.js`、`style.css`）放进
 
 ```
 <酒馆根目录>/data/<你的用户名>/extensions/st-agent/
 ```
 
-没有目录就自己建。`tools.js` / `adv-tools.js` 必须一起放（被 `index.js` import）；`adv-tools-v14.js` / `adv-tools-v15.js` / `adv-tools-v16.js` 可选，缺了只是少对应工具，不会报错。刷新页面即可。
+没有目录就自己建。`tools.js` / `adv-tools.js` 必须一起放（被 `index.js` import）；`adv-tools-v*.js` 是**按文件名动态 import** 的，缺哪个就少哪一层工具（v14 深改、v15 自动化链、v16 酒馆助手、v17 群聊体检），不会报错但会静默少功能——所以别只拷前五个文件，整目录一起拷。刷新页面即可。
 
 **方式三：一条命令（本目录 / zip 版）**
 
@@ -222,6 +222,22 @@ automation.list {}
 
 装酒馆助手有两个硬坑（本轮实测踩出来的，写在 `docs/v1.6-tavern-helper.md`）：必须放 `extensions/` 的直接子目录（不是 `third-party/`），且 `lib/` 目录不能漏——漏了会 `Failed to fetch dynamically imported module`，控制台只有一串 404，`TavernHelper` 永远是 `undefined`。
 
+## 群聊、内嵌书与体检（v1.7）
+
+工具数 116 → 125。前面六版把单卡单聊几乎挖穿了，剩下的空白其实是**群聊**、**角色卡里塞着的那本世界书**，还有**「我这个酒馆到底哪里在变胖」**。
+
+`group.all` `group.info` `group.create` `group.edit` `group.delete` `char.book` `char.bookExtract` `audit.run` `ext.maintain`
+
+- **群聊整组管理**：`group.create` 一句话建群（传角色头像名，自动校验头像存不存在），`group.edit` 改名 / 整体换成员 / `add` 加人 / `remove` 踢人 / 改激活策略 / 允许自答，`group.delete` 连它名下的 `groupChats/*.jsonl` 一起删。此前 v1.2 只有 `group.list` 和 `group.activate`，建群改人还得回 UI 手点。
+- **内嵌世界书**：`char.book` 读卡里 `data.character_book` 有几条、书叫啥、前几条的 keys；`char.bookExtract` 用**酒馆自己的** `convertCharacterBook` 把它抽成独立世界书（不手搓字段，`position`/`depth`/`enabled` 这些是反的，自己映射必错），且不动原卡。
+- **酒馆体检**：`audit.run` 一次给出角色卡×聊天档数量与楼层、每本世界书条目量（含没写 key 的**死条目**、全禁用条目、重复键）、群聊体积、最近聊天里最大的一档、正则条数，并把它们翻译成可执行的建议（比如「这 3 张卡从没聊过，想清磁盘从它们下手」）。
+- **扩展自维护**：`ext.maintain {action:'update'|'reinstall', id}`。
+
+**这一版修掉的两个真实坑**（实测记录见 `docs/v1.7-groups-audit.md`）
+
+- `getContext()` 里**没有** `createNewWorldInfo`。建世界书只能 `saveWorldInfo(name, {entries:{}}, true)` 先落空本占位再写内容，直接调用前端创建函数会 `is not a function`。
+- `ext.maintain` 必须先探 `remote_url`：`/api/extensions/update` 只会 `git pull`，手动拷贝进目录的扩展必然 500；而 `reinstallExtension` 的逻辑是「先 `delete` 再按 `remote_url` 装回」——非 git 扩展的 `remote_url` 是空，等于**删掉就装不回来**。所以非 git 环境下 reinstall 被工具直接拒绝，只回结构化原因。
+
 ## 可选增强：磁盘桥接
 
 上面这些已经覆盖「酒馆内部文件」的全部 CRUD。如果你还想要**任意路径读写、grep 整个装包、跑 shell 命令**，再装 `st-agent-bridge`（服务端插件）：
@@ -260,7 +276,7 @@ automation.list {}
 酒馆开了 CSRF 保护时，扩展用的是酒馆自己的请求封装，正常不会触发；如果你手动改过 `request.js` 或用了反向代理改写，需要放行。
 
 **想确认装了几个工具**
-F12 执行 `STAgent.tools.length`：基础 116（进阶/自主/自动化/深改/自动化链/酒馆助手六层），装桥接是 125。
+F12 执行 `STAgent.tools.length`：基础 125（进阶/自主/自动化/深改/自动化链/酒馆助手/群聊体检七层），装桥接是 134。
 
 ## 开发
 
@@ -288,3 +304,5 @@ STAgent.run('列出所有世界书')
 - 桥接的 `exec` 是给高级用户开的口子，默认建议只开读写
 - 从 URL 安装后目录里会多出 `install.sh`、`README.md`、`st-agent-bridge/` 等文件，它们不参与运行；后续 `git pull` 可原地升级扩展本体
 - v1.6 这一层依赖「酒馆助手」在线；它没装时 12 个 `th/preset/lore/msg.render/import/gen.models` 工具会报错，属预期
+- v1.7 的 `audit.run` 会逐张卡查聊天档（`/api/characters/chats`），几百张卡时会慢几秒；用 `chatSample` 限制最近聊天采样量即可
+- v1.7 的 `ext.maintain` 只对 git 安装的扩展有效；手动拷贝的目录会被明确拒绝（原因见上一节）
