@@ -23,15 +23,24 @@ export function toolsPrompt() {
 }
 
 /* ------------------------------ 可选工具模块（v1.4+） ------------------------------
- * 探针式加载：新工具模块按 adv-tools-vN 命名放进扩展目录即可自动挂载，
- * 不需要再改本文件、adv-tools.js 或 index.js。
- * 模块须导出 TOOLS 数组（元素结构与 ADV_TOOLS 相同）。
+ * 曾经的写法是在顶层 `for (...) { await import('./adv-tools-vN.js') }` 探针式挂载，
+ * 这在本插件里是个致命写法：adv-tools-vN 与 adv-tools/adv-lib/tools-lib 之间存在交叉引用，
+ * 而这些交叉引用又绕回 tools.js 所在的依赖环。模块图里只要存在「环 + 顶层 await」，
+ * ESM 就永远等不到 resolve —— 整个插件一个模块都不会执行，页面表现就是
+ * 「扩展列表里有 ST Agent，但悬浮球、面板、设置卡片全都不出现，控制台也没报错」。
+ * 所以这里改成静态导入 + 别名（TOOLS 同名，用 as 区分），编译期就把依赖图拉直。
  */
 import { ADV_TOOLS } from './adv-tools.js';
+import { TOOLS as TOOLS_V14 } from './adv-tools-v14.js';
+import { TOOLS as TOOLS_V15 } from './adv-tools-v15.js';
+import { TOOLS as TOOLS_V16 } from './adv-tools-v16.js';
+import { TOOLS as TOOLS_V17 } from './adv-tools-v17.js';
+import { TOOLS as TOOLS_V18 } from './adv-tools-v18.js';
+import { TOOLS as TOOLS_V19 } from './adv-tools-v19.js';
+import { TOOLS as TOOLS_V20 } from './adv-tools-v20.js';
+import { TOOLS as TOOLS_V21 } from './adv-tools-v21.js';
+import { TOOLS as TOOLS_V22 } from './adv-tools-v22.js';
 
-for (const mod of ['adv-tools-v14', 'adv-tools-v15', 'adv-tools-v16', 'adv-tools-v17', 'adv-tools-v18', 'adv-tools-v19', 'adv-tools-v20', 'adv-tools-v21', 'adv-tools-v22']) {
-    try {
-        const m = await import(`./${mod}.js`);
-        if (Array.isArray(m?.TOOLS)) ADV_TOOLS.push(...m.TOOLS);
-    } catch { /* 模块不存在或加载失败：跳过 */ }
+for (const group of [TOOLS_V14, TOOLS_V15, TOOLS_V16, TOOLS_V17, TOOLS_V18, TOOLS_V19, TOOLS_V20, TOOLS_V21, TOOLS_V22]) {
+    if (Array.isArray(group)) ADV_TOOLS.push(...group);
 }

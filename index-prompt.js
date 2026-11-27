@@ -9,7 +9,6 @@ import { html, buildPanel, bindPanel } from './index-ui.js';
 import { buildMenuEntry, togglePanel, setBusy, updateStatus, addLog, addStreamingDraft } from './index-ui2.js';
 import { askPlan, askApprovalBatch, askApproval, submitTask, populateProfiles, syncSettingsUI } from './index-ui3.js';
 import { registerChatTools } from './index-tools.js';
-import { refreshBridgeState, initialize } from './index.js';
 import { toolByName, toolsPrompt, activeTools } from './tools.js';
 import { ADV_TOOLS, advToolByName, advToolsPrompt, helperInfo } from './adv-tools.js';
 

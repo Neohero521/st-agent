@@ -1,3 +1,6 @@
+// 模块求值标记：用来区分「模块没执行」和「执行后初始化失败」
+try { document.documentElement.dataset.staMod = String(Date.now()); } catch (e) {}
+
 import { getContext } from '../../../extensions.js';
 import { MODULE, BRIDGE_ID, DEFAULT_SETTINGS, settings, abortController, running, bridgeOnline, generateOverride, messages, currentView, setSettings, setAbortController, setRunning, setBridgeOnline, setMessages, setCurrentView, setGenerateOverride } from './index-state.js';
 import { ctx, loadSettings, saveSettings, pingBridge, getProfiles, generateRawFn, getGenerateRaw, serializeHistory, rawGenerate } from './index-boot.js';
@@ -72,12 +75,48 @@ export function initialize() {
     }
 }
 
-jQuery(async () => {
+/**
+ * 启动。
+ *
+ * 这里不用 jQuery(...) 包一层：酒馆 1.19 起前端脚本的注入时机前移，
+ * 模块求值时全局 jQuery 可能还没挂上，`jQuery is not defined` 会让整个模块
+ * 在顶层就抛掉——表现就是「扩展列表里有 ST Agent，但面板/悬浮球一个都不出现」，
+ * 而且控制台看不出是谁的锅。改成原生 DOM ready + 上下文就绪重试，与 jQuery 无关。
+ */
+let bootAttempts = 0;
+
+function contextReady() {
     try {
-        console.log('[st-agent] booting…');
+        if (typeof getContext !== 'function') return false;
+        const c = getContext();
+        return !!(c && typeof c === 'object');
+    } catch { return false; }
+}
+
+function boot() {
+    if (window.__staBooted) return;
+    try {
+        if (!contextReady()) throw new Error('酒馆上下文还没就绪');
         initialize();
+        window.__staBooted = true;
         console.log('[st-agent] booted. panel =', !!document.querySelector('.sta-panel'));
     } catch (error) {
-        console.error('[st-agent] 初始化失败:', error);
+        bootAttempts += 1;
+        if (bootAttempts <= 6) {
+            // 400ms / 800ms / 1.2s… 逐次退避，最多 6 次；手机端弱机冷启动也够用
+            setTimeout(boot, 400 * bootAttempts);
+        } else {
+            console.error('[st-agent] 初始化失败：', error);
+        }
     }
-});
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once: true });
+} else {
+    boot();
+}
+
+// 极端情况：ST 把脚本注入到还没建好的 body 上（1.19 的 extensions 注入时序），
+// 模块虽执行了但 DOM 不完整。再排一次到 window load，幂等，重复调用无副作用。
+window.addEventListener('load', () => { setTimeout(boot, 0); }, { once: true });

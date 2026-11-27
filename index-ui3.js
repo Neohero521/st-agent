@@ -9,7 +9,6 @@ import { runAgent } from './index-agent.js';
 import { html, buildPanel, bindPanel } from './index-ui.js';
 import { buildMenuEntry, togglePanel, setBusy, updateStatus, addLog, addStreamingDraft } from './index-ui2.js';
 import { registerChatTools } from './index-tools.js';
-import { refreshBridgeState, initialize } from './index.js';
 
 /** 停止键按下时把等待中的确认卡收掉：否则那个 Promise 永远不 resolve，面板会一直转圈 */
 function bindAbort(signal, onAbort) {

@@ -9,7 +9,6 @@ import { runAgent } from './index-agent.js';
 import { buildMenuEntry, togglePanel, setBusy, updateStatus, addLog, addStreamingDraft } from './index-ui2.js';
 import { askPlan, askApprovalBatch, askApproval, submitTask, populateProfiles, syncSettingsUI } from './index-ui3.js';
 import { registerChatTools } from './index-tools.js';
-import { refreshBridgeState, initialize } from './index.js';
 import { createSession, switchSession, deleteSession, renameSession, renderSessionList, sessionDiag } from './index-sessions.js';
 import { journalInfo } from './index-persist.js';
 

@@ -9,7 +9,6 @@ import { runAgent } from './index-agent.js';
 import { html, buildPanel, bindPanel } from './index-ui.js';
 import { askPlan, askApprovalBatch, askApproval, submitTask, populateProfiles, syncSettingsUI } from './index-ui3.js';
 import { registerChatTools } from './index-tools.js';
-import { refreshBridgeState, initialize } from './index.js';
 
 /** 用户是不是还贴着底部在看。贴底才自动滚——不然往上翻历史会被一直拽回来。 */
 function nearBottom(el) {
