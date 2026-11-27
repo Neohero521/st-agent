@@ -4,7 +4,7 @@ import { ctx, loadSettings, saveSettings, pingBridge, getProfiles, generateRawFn
 import { typewrite, MODEL_FIELD, buildChatPayload, streamChatCompletion } from './index-stream.js';
 import { buildSystemPrompt } from './index-prompt.js';
 import { parseToolCalls, repairJson, buildCall, extractFinal, sumChars, compactHistory, stepGenerate, continueText, detectTruncation, stripToolMarkup } from './index-loop.js';
-import { ensureActiveSession, historyForContext, appendTurn, flushSessions, renderSessionList, renderSessionLog } from './index-sessions.js';
+import { ensureActiveSession, historyForContext, appendTurn, flushSessions, renderSessionList, renderSessionLog, pruneResultText, forceCompact, pushSpill } from './index-sessions.js';
 import { HIGH_RISK_PATTERNS, RISK_META, riskOf, batchLines, executeTool, summarizeArgs, briefArgs, takeRefreshNote } from './index-risk.js';
 import { html, buildPanel, bindPanel } from './index-ui.js';
 import { buildMenuEntry, togglePanel, setBusy, updateStatus, addLog, addStreamingDraft } from './index-ui2.js';
@@ -30,6 +30,16 @@ function toolMeta(ok, brief, level, payload) {
 function isTokenLimitError(error) {
     const msg = String(error?.message || error || '');
     return /max_tokens|max_completion_tokens|max output tokens|maximum context|too many tokens|token.{0,12}too.{0,6}large|invalid.{0,12}max.?tokens?/i.test(msg);
+}
+
+/**
+ * 上下文窗口超限：历史太长，只能缩历史——和「输出上限太大」是两件事，
+ * 后者靠降 maxTokens，前者靠压缩检查点。判定放在降档之前，否则会一路降档降到 2048 还是超。
+ */
+function isContextOverflow(error) {
+    const msg = String(error?.message || error || '');
+    if (/max_tokens|max_completion_tokens|max output tokens|invalid.{0,12}max.?tokens?/i.test(msg)) return false;
+    return /maximum context|context[ _-]?(length|window)|prompt is too long|input is too long|too many tokens|reduce the length|exceed.{0,20}(context|window)|超出.{0,10}(上下文|窗口)|上下文.{0,10}(超|上限)/i.test(msg);
 }
 
 export async function runAgent(task) {
@@ -68,6 +78,7 @@ export async function runAgent(task) {
     const turnOps = [];      // 本轮执行的工具动作，收尾时折成一条摘要
     let finalText = '';
     let savedMaxTokens = null;   // 服务端嫌上限太大时只在本次任务里降档，收尾时交还原值
+    let overflowRetried = false; // 上下文超限只压一次、只重试一次（deepseek-harness 的 overflow 恢复口径）
     try {
         while (steps < settings.maxSteps) {
             if (abortController?.signal?.aborted) { addLog('error', '已停止'); break; }
@@ -96,7 +107,20 @@ export async function runAgent(task) {
                 }
             } catch (error) {
                 draft.cleanup();
-                // 有的服务端不接受这么大的单次上限，直接 400；降一档再试，别让用户自己去猜
+                // ① 上下文窗口超限：把会话压成检查点、丢掉远端的旧轮次再重试。
+                //    这比"降 maxTokens"更对路——超限是历史太长，不是输出太长，降档只会让回复更短还照样超。
+                if (!overflowRetried && isContextOverflow(error)) {
+                    overflowRetried = true;
+                    forceCompact(session, 6);
+                    const sys = messages[0] && messages[0].role === 'system' ? messages[0] : null;
+                    const tail = messages.slice(-6);
+                    const cp = session.checkpoint ? [{ role: 'user', content: String(session.checkpoint) }] : [];
+                    messages.splice(0, messages.length, ...(sys ? [sys] : []), ...cp, ...tail);
+                    addLog('error', '提示上下文超限：已把会话压成检查点、只保留最近 6 条，重试这一步');
+                    appendTurn('assistant', '上下文超限，已压缩历史后重试', 'error', '', { sessionId: session.id, flush: false, render: false });
+                    continue;
+                }
+                // ② 有的服务端不接受这么大的单次上限，直接 400；降一档再试，别让用户自己去猜
                 if (isTokenLimitError(error) && settings.maxTokens > 2048) {
                     const before = settings.maxTokens;
                     // 只在本次任务内降档，不动用户设置：否则任务跑完用户会发现
@@ -240,9 +264,12 @@ export async function runAgent(task) {
                 turnOps.push(call.name + (ok ? '' : '✗') + briefCut);
                 // 动作也落盘：手机切后台被回收、回来重载时，这一行不会变成一条笼统摘要
                 appendTurn('assistant', call.name, 'tool', toolMeta(ok, briefUsable ? briefRaw.slice(0, 60) : '', level, payload), { flush: false, render: false });
+                // 超预算的结果先落一份会话级 spill，再把修剪版塞回上下文：截断不丢信息，要细节时模型能自己取
+                const spillId = pushSpill(session, call.name, payload);
+                const spilled = spillId ? `\n（结果过长，已存为 spill #${spillId}（原文 ${String(payload).length} 字）。要看细节用 spill.read 带 id 与 offset 分段取，不要重复调用同一个工具）` : '';
                 messages.push({
                     role: 'user',
-                    content: `<tool_result name="${call.name}" ok="${ok}">${String(payload).slice(0, 12000)}</tool_result>`,
+                    content: `<tool_result name="${call.name}" ok="${ok}">${pruneResultText(payload)}${spilled}</tool_result>`,
                 });
             }
 

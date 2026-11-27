@@ -19,7 +19,20 @@ import {
 } from './index-state.js';
 
 const MAX_MSGS_PER_SESSION = 200;   // 单会话最多保留多少条对话事实
-const KEEP_ON_COMPACT = 12;         // 压缩时保留的最近条数
+const KEEP_ON_COMPACT = 12;         // 压缩时逐字保留的最近条数
+
+/**
+ * 上下文压力策略（对标 deepseek-harness packages/compaction 的做法）：
+ *  · 工具结果修剪：超 8192 码点的结果，保留头 4096 + 尾 1024，中间打标记。
+ *    头尾都留是关键——结论、报错、回执通常在末尾，只截前 1400 字会把它们全丢掉。
+ *  · 会话检查点：单会话超过 CHECKPOINT_TRIGGER_CHARS 时，把最旧部分压成一条检查点，
+ *    近期消息逐字保留，后续请求从检查点继续，而不是把老消息直接扔掉。
+ */
+const RESULT_PRUNE_CHARS = 8192;
+const RESULT_PRUNE_HEAD = 4096;
+const RESULT_PRUNE_TAIL = 1024;
+const RESULT_PRUNE_MARK = '\n\n[... 结果中段已裁剪 ...]\n\n';
+const CHECKPOINT_TRIGGER_CHARS = 80000;
 
 // 会话里允许出现的条目类型：task/final/ops 是上下文事实，tool/plan/error 只用于界面回放
 const KINDS = new Set(['task', 'final', 'ops', 'tool', 'plan', 'error']);
@@ -91,8 +104,9 @@ function fmtTime(ts) {
 
 function sessionChars(s) {
     if (!s || !Array.isArray(s.messages)) return 0;
-    let n = 0;
+    let n = String(s.checkpoint || '').length;
     for (const m of s.messages) n += String(m && m.content || '').length;
+    if (Array.isArray(s.spill)) for (const x of s.spill) n += String(x && x.text || '').length;
     return n;
 }
 
@@ -179,9 +193,131 @@ export function flushSessions() {
 }
 
 /**
+ * 工具结果修剪：超出预算就保留头尾、中间替换成标记。
+ * deepseek-harness 的 pruner 用同一套预算（8192 / 4096 / 1024，按 Unicode 码点切，不拆 emoji 对）。
+ */
+export function pruneResultText(text) {
+    const s = String(text == null ? '' : text);
+    if (s.length <= RESULT_PRUNE_CHARS) return s;
+    const head = Array.from(s).slice(0, RESULT_PRUNE_HEAD).join('');
+    const tail = Array.from(s).slice(-RESULT_PRUNE_TAIL).join('');
+    return head + RESULT_PRUNE_MARK + tail;
+}
+
+/**
+ * 会话检查点：把要被压缩掉的旧消息整理成结构化摘要。
+ * 纯本地生成、不额外调模型（手机端多一次请求就是几秒等待 + 一份额度），
+ * 结构按 deepseek-harness 的 checkpoint 八段裁到与写卡/酒馆任务相关的六段。
+ */
+function buildCheckpoint(drop) {
+    const clip = (v, n) => {
+        const s = String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+        return s.length > n ? s.slice(0, n) + '…' : s;
+    };
+    const tasks = drop.filter(m => m.kind === 'task').map(m => clip(m.content, 160));
+    const ops = drop.filter(m => m.kind === 'ops').map(m => clip(m.content, 80));
+    const finals = drop.filter(m => m.kind === 'final').map(m => clip(m.content, 200));
+    const errors = drop.filter(m => m.kind === 'error').map(m => clip(m.content, 120));
+    const tools = [...new Set(drop.filter(m => m.kind === 'tool' && m.tool).map(m => String(m.tool)))];
+    const lines = [];
+    lines.push('<compacted-summary>');
+    lines.push('（这是本会话此前对话的自动检查点，属于既有背景：直接在此基础上继续，不要复述、不要回应这段。）');
+    lines.push('');
+    lines.push('## 目标');
+    if (tasks.length) {
+        lines.push('- 最初：' + tasks[0]);
+        if (tasks.length > 1) lines.push('- 最近：' + tasks[tasks.length - 1]);
+    } else lines.push('- （无明确任务记录）');
+    lines.push('## 已执行的操作');
+    if (ops.length) for (const o of ops.slice(-10)) lines.push('- ' + o);
+    else lines.push('- （无）');
+    lines.push('## 已用工具');
+    lines.push(tools.length ? '- ' + tools.join('、') : '- （无）');
+    if (errors.length) {
+        lines.push('## 报错与失败');
+        for (const e of errors.slice(-5)) lines.push('- ' + e);
+    }
+    lines.push('## 已确认的结论');
+    if (finals.length) for (const f of finals.slice(-5)) lines.push('- ' + f);
+    else lines.push('- （无）');
+    lines.push('## 压缩时点');
+    lines.push(`- 共压缩 ${drop.length} 条历史；逐字保留最近 ${KEEP_ON_COMPACT} 条`);
+    lines.push('</compacted-summary>');
+    return lines.join('\n');
+}
+
+/** 把一条会话压成「检查点 + 最近 N 条」，返回是否真的压了 */
+function compactSession(s, keep = KEEP_ON_COMPACT) {
+    if (!Array.isArray(s.messages) || s.messages.length <= keep) return false;
+    const drop = s.messages.slice(0, s.messages.length - keep);
+    s.checkpoint = buildCheckpoint(drop);
+    s.messages = s.messages.slice(-keep);
+    s.compacted = true;
+    s.compactedAt = nowIso();
+    s.compactCount = (Number(s.compactCount) || 0) + 1;
+    return true;
+}
+
+/** 手动强制压缩（上下文超限重试时用）：逐字只留 keep 条 */
+export function forceCompact(session, keep = 6) {
+    const s = session || getActiveSession();
+    if (!s) return false;
+    return compactSession(s, Math.max(2, Number(keep) || 6));
+}
+
+/* ------------------------------ 大结果 spill（对标 deepseek-harness spill 家族） ------------------------------ */
+/**
+ * 工具结果太大时，上下文里只放修剪版，全文存到会话级 spill，
+ * 同时把定位信息（id / 原长 / 预览）交给模型——它需要细节时用 spill.read 分段取回。
+ * 这样既不会撑爆窗口，也不会像过去那样「截断即丢失」。
+ */
+const SPILL_MAX_ITEMS = 6;
+const SPILL_ITEM_CHARS = 20000;
+
+export function pushSpill(session, tool, text) {
+    const s = session || getActiveSession();
+    if (!s) return null;
+    const body = String(text == null ? '' : text);
+    if (body.length <= RESULT_PRUNE_CHARS) return null;
+    if (!Array.isArray(s.spill)) s.spill = [];
+    const id = 'r' + ((Number(s.spillSeq) || 0) + 1);
+    s.spillSeq = Number(s.spillSeq) + 1 || 1;
+    s.spill.push({ id, tool: String(tool || ''), chars: body.length, text: body.slice(0, SPILL_ITEM_CHARS), at: nowIso() });
+    while (s.spill.length > SPILL_MAX_ITEMS) s.spill.shift();
+    return id;
+}
+
+export function listSpill(session) {
+    const s = session || getActiveSession();
+    if (!s || !Array.isArray(s.spill) || !s.spill.length) return [];
+    return s.spill.map(x => ({ id: x.id, tool: x.tool, chars: x.chars, kept: String(x.text).length, preview: String(x.text).slice(0, 160) }));
+}
+
+export function readSpill(session, id, offset = 0, limit = 6000) {
+    const s = session || getActiveSession();
+    const hit = (s && Array.isArray(s.spill)) ? s.spill.find(x => x.id === String(id)) : null;
+    if (!hit) return null;
+    const from = Math.max(0, Number(offset) || 0);
+    const want = Math.min(20000, Math.max(200, Number(limit) || 6000));
+    const text = String(hit.text);
+    const to = Math.min(from + want, text.length);
+    return {
+        id: hit.id,
+        tool: hit.tool,
+        chars_total: hit.chars,
+        kept: text.length,
+        from,
+        to,
+        text: text.slice(from, to),
+        has_more: to < text.length,
+        note: hit.chars > text.length ? `原文 ${hit.chars} 字，仅保留前 ${text.length} 字` : '',
+    };
+}
+
+/**
  * 二道闸清理：
  *  ① 会话数超上限 → 淘汰最久未使用的（当前会话豁免）
- *  ② 总字符超预算 → 把最旧会话的消息压到最近 KEEP_ON_COMPACT 条
+ *  ② 总字符超预算 / 单会话超阈值 → 压成「检查点 + 最近 KEEP_ON_COMPACT 条」
  */
 export function prune() {
     const limit = Math.max(1, Number(settings.sessionLimit) || 20);
@@ -194,24 +330,42 @@ export function prune() {
         survivors.forEach(s => sessions.push(s));
     }
 
+    // 单会话超阈值的先各自压一次：压缩本身就能腾出空间，别等到总预算爆了再按时间淘汰别人
+    for (const s of sessions) {
+        if (sessionChars(s) > CHECKPOINT_TRIGGER_CHARS) compactSession(s);
+    }
+
     const budget = Math.max(50000, Number(settings.sessionCharBudget) || 1200000);
     let total = 0;
     for (const s of sessions) total += sessionChars(s);
-    if (total <= budget) return;
+    if (total <= budget) {
+        for (const s of sessions) {
+            if (s.messages.length > MAX_MSGS_PER_SESSION) {
+                s.messages = s.messages.slice(-MAX_MSGS_PER_SESSION);
+                s.compacted = true;
+            }
+        }
+        return;
+    }
 
     const ordered = sessions.slice().sort((a, b) => a.updatedAt - b.updatedAt);
     for (const s of ordered) {
         if (total <= budget) break;
         if (!s.messages.length) continue;
         const before = sessionChars(s);
-        s.messages = s.messages.slice(-KEEP_ON_COMPACT);
-        s.compacted = true;
+        if (!compactSession(s)) {
+            s.messages = s.messages.slice(-4);
+            s.compacted = true;
+        }
         total -= (before - sessionChars(s));
     }
 
     // 单会话条数上限
     for (const s of sessions) {
-        if (s.messages.length > MAX_MSGS_PER_SESSION) s.messages = s.messages.slice(-MAX_MSGS_PER_SESSION);
+        if (s.messages.length > MAX_MSGS_PER_SESSION) {
+            s.messages = s.messages.slice(-MAX_MSGS_PER_SESSION);
+            s.compacted = true;
+        }
     }
 }
 
@@ -393,7 +547,11 @@ export function renderSessionList() {
         parts.push(`${s.messages.length} 条`);
         parts.push(fmtTime(s.updatedAt));
         if (s.cardName) parts.push(s.cardName);
-        if (s.compacted) parts.push('已压缩');
+        if (s.compacted) {
+            const cp = String(s.checkpoint || '').length;
+            parts.push(cp ? `已压缩${s.compactCount > 1 ? '×' + s.compactCount : ''}（检查点 ${cp} 字）` : '已压缩');
+        }
+        if (Array.isArray(s.spill) && s.spill.length) parts.push(`暂存 ${s.spill.length} 份大结果`);
         meta.textContent = parts.join(' · ');
 
         main.append(title, meta);
@@ -543,7 +701,7 @@ export function renderSessionLog(session) {
  */
 export function historyForContext(session) {
     const s = session || getActiveSession();
-    if (!s || !s.messages.length) return [];
+    if (!s || (!s.messages.length && !s.checkpoint)) return [];
     // tool/plan/error 是给人看的过程记录，不进上下文：tool 行没有结果（结果已单独作为 tool_result 传过），
     // 全带上只会把窗口塞满、还让模型以为这些是自己在说的
     const rows = s.messages
@@ -558,5 +716,9 @@ export function historyForContext(session) {
         // 原样回灌等于教它继续这么写，所以每次取上下文都清一遍——旧脏档也跟着自愈。
         .map(m => (m.role === 'assistant' ? { role: m.role, content: stripToolMarkup(m.content) } : m))
         .filter(m => m.content && m.content.trim());
+    // 检查点放最前面：它代替了被压缩掉的老消息，模型从这份摘要接着干（deepseek-harness 的做法）
+    if (s.checkpoint && String(s.checkpoint).trim()) {
+        rows.unshift({ role: 'user', content: String(s.checkpoint).trim() });
+    }
     return rows;
 }

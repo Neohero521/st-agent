@@ -12,6 +12,7 @@
 import { loadBook, setEntry, getEntries, entryFields } from './adv-lib-world.js';
 import { c } from './adv-lib-core.js';
 import { toPlacement } from './tools-set-c.js';
+import { listSpill, readSpill } from './index-sessions.js';
 
 /* ------------------------------ 固定模板 ------------------------------ */
 
@@ -736,6 +737,29 @@ export const TOOLS = [
             if (!item.id) delete item.id;
             const out = await putScript(ctx, local, av, item);
             return { ok: true, avatar: av, name: item.name, id: out.id || null, created: out.created, scripts: out.scripts, enabled: item.enabled };
+        },
+    },
+    {
+        name: 'spill.list',
+        kind: 'read',
+        desc: '列出本会话里因过大被 spill 的工具结果（id / 工具名 / 原长 / 预览）。上下文里只放了修剪版（头 4096 + 尾 1024）时，用它能确认完整原文还在、并拿到 id。',
+        params: {},
+        run: async () => ({ ok: true, items: listSpill() }),
+    },
+    {
+        name: 'spill.read',
+        kind: 'read',
+        desc: '按 id 分段取回 spill 里保存的工具结果原文（默认每次 6000 字，带 offset 往后翻，单次上限 20000）。结果被修剪过时，需要中间细节就用它，不要去重复调用那个昂贵的原工具。',
+        params: {
+            id: 'string spill id（spill.list 里拿）',
+            offset: 'number 可选，起点字符，默认 0',
+            limit: 'number 可选，本次长度，默认 6000',
+        },
+        run: async a => {
+            if (!a.id) throw new Error('spill.read 需要 id');
+            const r = readSpill(null, String(a.id), a.offset, a.limit);
+            if (!r) throw new Error(`没有 spill #${a.id}（可能已被更新的 spill 淘汰，或不属于当前会话）`);
+            return r;
         },
     },
 ];
