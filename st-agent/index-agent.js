@@ -67,6 +67,7 @@ export async function runAgent(task) {
     let finished = false;   // 正常收尾（模型给了结论）标记：避免和"撞到最大步数"混为一谈
     const turnOps = [];      // 本轮执行的工具动作，收尾时折成一条摘要
     let finalText = '';
+    let savedMaxTokens = null;   // 服务端嫌上限太大时只在本次任务里降档，收尾时交还原值
     try {
         while (steps < settings.maxSteps) {
             if (abortController?.signal?.aborted) { addLog('error', '已停止'); break; }
@@ -98,11 +99,12 @@ export async function runAgent(task) {
                 // 有的服务端不接受这么大的单次上限，直接 400；降一档再试，别让用户自己去猜
                 if (isTokenLimitError(error) && settings.maxTokens > 2048) {
                     const before = settings.maxTokens;
+                    // 只在本次任务内降档，不动用户设置：否则任务跑完用户会发现
+                    // "我明明设的 8192，怎么变成 2048 了"
+                    if (savedMaxTokens === null) savedMaxTokens = before;
                     settings.maxTokens = Math.max(2048, Math.floor(settings.maxTokens / 2));
-                    saveSettings();
-                    syncSettingsUI();
-                    addLog('error', `服务端不接受 ${before} token 的输出上限，已降到 ${settings.maxTokens} 重试这一步`);
-                    appendTurn('assistant', `输出上限自动降档：${before} → ${settings.maxTokens}`, 'error', '', { flush: false, render: false });
+                    addLog('error', `服务端不接受 ${before} token 的输出上限，本次任务已降到 ${settings.maxTokens} 重试这一步`);
+                    appendTurn('assistant', `输出上限临时降档：${before} → ${settings.maxTokens}`, 'error', '', { sessionId: session.id, flush: false, render: false });
                     continue;
                 }
                 throw error;
@@ -173,15 +175,24 @@ export async function runAgent(task) {
                 });
 
             let batchDecision = 'all';
+            const denyList = [];
             if (needConfirm.length === 1) {
                 batchDecision = (await askApproval(needConfirm[0].call, abortController?.signal)) ? 'all' : 'none';
             } else if (needConfirm.length > 1) {
-                batchDecision = settings.batchConfirm
-                    ? await askApprovalBatch(needConfirm, abortController?.signal)
-                    : (await askApproval(needConfirm[0].call, abortController?.signal)) ? 'all' : 'none';
+                if (settings.batchConfirm) {
+                    batchDecision = await askApprovalBatch(needConfirm, abortController?.signal);
+                } else {
+                    // 关掉「批次确认」就得一条条问。只拿第一张卡的答复放行全部，
+                    // 等于用户没见过的删改被一起执行了。
+                    for (const item of needConfirm) {
+                        const allow = await askApproval(item.call, abortController?.signal);
+                        if (!allow) denyList.push(item.call);
+                        if (abortController?.signal?.aborted) break;
+                    }
+                }
             }
 
-            const denied = new Set();
+            const denied = new Set(denyList);
             if (batchDecision === 'none') needConfirm.forEach(({ call }) => denied.add(call));
             if (batchDecision === 'safe') needConfirm.filter(({ level }) => level > 2).forEach(({ call }) => denied.add(call));
 
@@ -252,12 +263,17 @@ export async function runAgent(task) {
     } finally {
         // 回写会话：只存「结论 + 动作摘要」，tool_result 不落库（重放时已失效，还会污染上下文）
         try {
-            if (finalText) appendTurn('assistant', finalText, 'final');
-            if (turnOps.length) appendTurn('assistant', turnOps.slice(0, 40).join('\n'), 'ops');
+            if (finalText) appendTurn('assistant', finalText, 'final', '', { sessionId: session.id });
+            if (turnOps.length) appendTurn('assistant', turnOps.slice(0, 40).join(String.fromCharCode(10)), 'ops', '', { sessionId: session.id });
             flushSessions();
             renderSessionList();
         } catch (error) {
             console.warn('[st-agent] 会话回写失败：', error && error.message);
+        }
+        // 降档只是本任务的权宜之计，交还用户原本的设置
+        if (savedMaxTokens !== null) {
+            settings.maxTokens = savedMaxTokens;
+            syncSettingsUI();
         }
         setRunning(false);
         setAbortController(null);
