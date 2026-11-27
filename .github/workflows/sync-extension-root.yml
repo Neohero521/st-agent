@@ -14,15 +14,15 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message || '', '[sync]')
     steps:
       - uses: actions/checkout@v4
-      - name: Apply v1.22.0 package to extension root
+      - name: Apply v1.23.0 package to extension root
         run: |
           set -e
-          curl -fL --retry 3 --retry-delay 2 -o /tmp/pkg.zip "https://aka.doubaocdn.com/s/yPwKEiO8Cj"
+          curl -fL --retry 3 --retry-delay 2 -o /tmp/pkg.zip "https://aka.doubaocdn.com/s/yakVtffKEU"
           ls -l /tmp/pkg.zip
           rm -rf /tmp/pkg && mkdir -p /tmp/pkg && unzip -o -q /tmp/pkg.zip -d /tmp/pkg
           cp -fR /tmp/pkg/st-agent/. .
           git config user.name 'st-agent-bot'
           git config user.email 'bot@users.noreply.github.com'
           git add -A
-          git commit -m 'feat: 计划模式（plan.write/submit/read/reset/policy + 未批准硬门 + 头部徽标）+ 修刷新丢 todo/goal/plan/checkpoint, sync root to v1.22.0 [sync]' || echo 'nothing to commit'
+          git commit -m 'fix: 正则默认写角色卡正则位（scoped）并自动开闸 + MVU 状态栏两条正则落卡内 + regex.list/delete/audit/预演按作用域, sync root to v1.23.0 [sync]' || echo 'nothing to commit'
           git push origin HEAD:main
