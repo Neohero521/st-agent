@@ -15,39 +15,134 @@ import { ADV_TOOLS, advToolByName, advToolsPrompt, helperInfo } from './adv-tool
 
 /* ------------------------------ 循环 ------------------------------ */
 
+const TAG_TAB = ' \t\r\n';
+
+function tryJson(text) {
+    const raw = String(text || '').trim();
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { /* 再试一次修好的 */ }
+    try { return JSON.parse(repairJson(raw)); } catch { return null; }
+}
+
+/**
+ * 从开标签的属性串里取 name。
+ * 必须三种写法都认：name="x"、name='x'、name=x（模型在长上下文里很容易掉引号）。
+ * 用 indexOf 扫而不用正则：少一层转义，也就少一处推上去被吞坏的机会。
+ */
+function pickName(attrs) {
+    const low = String(attrs || '').toLowerCase();
+    for (const q of ['"', "'"]) {
+        let k = low.indexOf('name');
+        while (k >= 0) {
+            const before = k === 0 ? ' ' : low[k - 1];
+            let p = k + 4;
+            while (p < low.length && TAG_TAB.includes(low[p])) p++;
+            if (TAG_TAB.includes(before) && low[p] === '=') {
+                p++;
+                while (p < low.length && TAG_TAB.includes(low[p])) p++;
+                if (low[p] === q) {
+                    const end = low.indexOf(q, p + 1);
+                    if (end > p) {
+                        const v = String(attrs).slice(p + 1, end).trim();
+                        if (v) return v;
+                    }
+                }
+            }
+            k = low.indexOf('name', k + 4);
+        }
+    }
+    // 无引号：name=world.list
+    let k = low.indexOf('name');
+    while (k >= 0) {
+        const before = k === 0 ? ' ' : low[k - 1];
+        let p = k + 4;
+        while (p < low.length && TAG_TAB.includes(low[p])) p++;
+        if (TAG_TAB.includes(before) && low[p] === '=') {
+            p++;
+            while (p < low.length && TAG_TAB.includes(low[p])) p++;
+            let end = p;
+            while (end < low.length && !TAG_TAB.includes(low[end]) && low[end] !== '>' && low[end] !== '/') end++;
+            const v = String(attrs).slice(p, end).trim();
+            if (v) return v;
+        }
+        k = low.indexOf('name', k + 4);
+    }
+    return '';
+}
+
+/** 找到一个开标签的 '>' 位置（返回 '>' 之后的下标，找不到返回 -1） */
+function headEndOf(src, from) {
+    for (let i = from; i < src.length; i++) {
+        if (src[i] === '>') return i + 1;
+    }
+    return -1;
+}
+
+/** 把 src 里所有 <tool_call ...>body</tool_call ...> 扫出来，返回 [{name, body, start, end}] */
+function scanCallBlocks(src) {
+    const out = [];
+    const low = src.toLowerCase();
+    let pos = 0;
+    while (pos < low.length) {
+        const open = low.indexOf('<tool_call', pos);
+        if (open < 0) break;
+        const headEnd = headEndOf(src, open + 10);
+        if (headEnd < 0) break;
+        const close = low.indexOf('</tool_call', headEnd);
+        const closeEnd = close < 0 ? -1 : headEndOf(src, close + 11);
+        if (closeEnd < 0) {
+            // 未闭合：交给截断检测，这里只记录残块
+            out.push({ name: pickName(src.slice(open + 10, headEnd - 1)), body: src.slice(headEnd), start: open, end: src.length, unclosed: true });
+            break;
+        }
+        out.push({
+            name: pickName(src.slice(open + 10, headEnd - 1)),
+            body: src.slice(headEnd, close),
+            start: open,
+            end: closeEnd,
+            unclosed: false,
+        });
+        pos = closeEnd;
+    }
+    return out;
+}
+
 export function parseToolCalls(text) {
+    const src = String(text || '');
     const calls = [];
-    let rest = String(text || '');
 
-    // 1) <tool_call name="x">{...}</tool_call>
-    const re = /<tool_call\s+name\s*=\s*"([^"]+)"\s*>([\s\S]*?)<\/tool_call>/gi;
-    let m;
-    while ((m = re.exec(rest))) {
-        calls.push(buildCall(m[1], m[2]));
+    // 1) <tool_call name=...>body</tool_call>：双引号 / 单引号 / 裸名都认
+    let rest = src;
+    for (const block of scanCallBlocks(src)) {
+        if (!block.unclosed) {
+            if (block.name) {
+                calls.push(buildCall(block.name, block.body));
+            } else {
+                // 2) <tool_call>{"name":"x","arguments":{...}}</tool_call>
+                const obj = tryJson(block.body);
+                const name = obj && (obj.name || obj.tool);
+                if (name) calls.push({ name, args: obj.arguments || obj.args || obj.parameters || {}, raw: src.slice(block.start, block.end) });
+            }
+        } else if (block.name) {
+            // 未闭合：只有 body 像 JSON 时才当成"被切断的调用"，正文里提到标签不该算
+            const tail = block.body.trim();
+            if (tail === '' || tail[0] === '{' || tail[0] === '[') {
+                calls.push(buildCall(block.name, tail));
+            }
+        }
+        if (!block.unclosed) rest = rest.split(src.slice(block.start, block.end)).join(' ');
     }
-    rest = rest.replace(re, '');
-
-    // 2) <tool_call>{"name":"x","arguments":{...}}</tool_call>
-    const re2 = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi;
-    while ((m = re2.exec(rest))) {
-        try {
-            const obj = JSON.parse(m[1]);
-            const name = obj.name || obj.tool;
-            const args = obj.arguments || obj.args || obj.parameters || {};
-            if (name) calls.push({ name, args, raw: m[0] });
-        } catch { /* ignore */ }
-    }
-    rest = rest.replace(re2, '');
 
     // 3) ```json {"tool": "...", "args": {...}} ```
-    const re3 = /```(?:json)?\s*(\{[\s\S]*?"(?:tool|name)"[\s\S]*?\})\s*```/gi;
-    while ((m = re3.exec(rest))) {
-        try {
-            const obj = JSON.parse(m[1]);
-            const name = obj.tool || obj.name;
-            const args = obj.args || obj.arguments || obj.parameters || {};
-            if (name && (toolByName(name) || advToolByName(name))) calls.push({ name, args, raw: m[0] });
-        } catch { /* ignore */ }
+    const fenced = rest.split('```');
+    for (let i = 1; i < fenced.length; i += 2) {
+        const chunk = fenced[i].replace(/^[ \t\r\n]*(?:json|JSON)[ \t\r\n]*/, '');
+        if (chunk[0] !== '{') continue;
+        const obj = tryJson(chunk);
+        if (!obj) continue;
+        const name = obj.tool || obj.name;
+        const args = obj.args || obj.arguments || obj.parameters || {};
+        if (name && (toolByName(name) || advToolByName(name))) calls.push({ name, args, raw: '```' + fenced[i] + '```' });
     }
     return calls;
 }
@@ -89,8 +184,16 @@ export function buildCall(name, rawArgs) {
 }
 
 export function extractFinal(text) {
-    const m = /<final>([\s\S]*?)<\/final>/i.exec(text);
+    const src = String(text || '');
+    const m = /<final>([\s\S]*?)<\/final>/i.exec(src);
     if (m) return m[1].trim();
+    // 没有闭合：说明这一轮被切在 final 中间。别把半句话吐成普通回复，
+    // 至少把标签剥掉、把已经写出来的部分当结论显示（续写会在上层把它接完整）。
+    const open = src.toLowerCase().indexOf('<final>');
+    if (open >= 0) {
+        const tail = src.slice(open + 7).replace(/<\/final[^>]*>/i, '').trim();
+        if (tail) return tail;
+    }
     return null;
 }
 
@@ -99,7 +202,8 @@ export function sumChars(list) {
 }
 
 export function compactHistory(list) {
-    if (sumChars(list) <= settings.maxHistoryChars) return list;
+    const cap = Number(settings.maxHistoryChars) || 24000;
+    if (sumChars(list) <= cap) return list;
     const compacted = list.map((m, i) => {
         if (i <= 1) return m; // system + 首条任务
         if (typeof m.content !== 'string') return m;
@@ -132,6 +236,9 @@ export function estimateTokens(text) {
 /** 半句话的特征：结尾挂在这些符号上就说明话没说完 */
 const DANGLING_TAIL = /[，,、；;：:（(<《「『“"—…·]$/;
 
+/** 一句话收尾的标点：落在这些字符上，说明这句话本来就说完了 */
+const SENTENCE_END = '。！？!?…；;：:」』”"）)】—';
+
 /**
  * 判断这段文本是不是被输出上限切断了。
  * 只认三种证据，尽量不误伤正常结尾：
@@ -142,31 +249,41 @@ const DANGLING_TAIL = /[，,、；;：:（(<《「『“"—…·]$/;
 export function detectTruncation(text, maxTokens) {
     const full = String(text ?? '');
     if (!full.trim()) return { truncated: false, reason: '' };
+    const low = full.toLowerCase();
 
-    // 用字符串切分而不是正则：少一层转义，也就少一处出错机会
-    const lower = full.toLowerCase();
-    const opens = lower.split('<tool_call').length - 1;
-    const closes = lower.split('</tool_call>').length - 1;
-    if (opens > closes) return { truncated: true, reason: 'tool_call 未闭合' };
+    // ① 结构证据。这里只管"真的被切断的残块"：
+    //    正文里解说 `<tool_call>` 这个标签（模型经常干）不该被当成半截调用，
+    //    否则会触发没必要的续写，用户看到的就是同一段话被写两遍。
+    for (const block of scanCallBlocks(full)) {
+        if (block.unclosed) {
+            const tail = block.body.trim();
+            if (tail === '' || tail[0] === '{' || tail[0] === '[') {
+                return { truncated: true, reason: 'tool_call 未闭合' };
+            }
+            continue;
+        }
+        const body = block.body.trim();
+        if (!body) continue;
+        const probe = buildCall(block.name || 'unknown', body);
+        const msg = String(probe.parseError || '');
+        if (probe.parseError && /end of json|unterminated|unexpected end|after json/i.test(msg)) {
+            return { truncated: true, reason: 'JSON 参数被切断' };
+        }
+    }
 
-    if (lower.includes('<final>') && !lower.includes('</final>')) return { truncated: true, reason: 'final 未闭合' };
+    // ② final 没闭合，并且尾巴不是一句话的结尾
+    if (low.indexOf('<final>') >= 0 && low.indexOf('</final>') < 0) {
+        const after = full.slice(low.indexOf('<final>') + 7).trimEnd();
+        if (after && !SENTENCE_END.includes(after.slice(-1))) {
+            return { truncated: true, reason: 'final 未闭合' };
+        }
+    }
 
+    // ③ 代码块开了一半
     const fences = (full.match(/^```/gm) || []).length;
     if (fences % 2 === 1) return { truncated: true, reason: '代码块未闭合' };
 
-    // 只在这段文本由工具调用组成时才检查 JSON 括号（普通文字里出现括号是常事）
-    if (opens > 0) {
-        let brace = 0;
-        let bracket = 0;
-        for (const ch of full) {
-            if (ch === '{') brace++;
-            else if (ch === '}') brace--;
-            else if (ch === '[') bracket++;
-            else if (ch === ']') bracket--;
-        }
-        if (brace > 0 || bracket > 0) return { truncated: true, reason: 'JSON 未闭合' };
-    }
-
+    // ④ 顶到上限 / 结尾悬挂
     const budget = Number(maxTokens) || 0;
     if (budget > 0) {
         const est = estimateTokens(full);
