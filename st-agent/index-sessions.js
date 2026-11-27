@@ -40,7 +40,7 @@ function nowIso() {
 }
 
 export function autoTitle(text) {
-    const t = String(text == null ? '' : text).replace(/\\s+/g, ' ').trim();
+    const t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
     if (!t) return '新对话';
     return t.length > 22 ? t.slice(0, 22) + '…' : t;
 }
@@ -262,7 +262,7 @@ export function deleteSession(id) {
 export function renameSession(id, title) {
     const s = getSession(id);
     if (!s) return false;
-    const t = String(title == null ? '' : title).replace(/\\s+/g, ' ').trim();
+    const t = String(title == null ? '' : title).replace(/\s+/g, ' ').trim();
     s.title = t || '未命名对话';
     s.updatedAt = nowIso();
     saveSessions();
@@ -455,7 +455,7 @@ export function renderSessionLog(session) {
             body.textContent = m.content;
         } else if (m.kind === 'ops') {
             // 一轮里可能动了十几样东西：按行拆开一条一行，刷新后仍看得出"这轮到底改了什么"
-            const lines = String(m.content || '').split('\\n').map(x => x.trim()).filter(Boolean);
+            const lines = String(m.content || '').split('\n').map(x => x.trim()).filter(Boolean);
             if (lines.length <= 1) {
                 body.textContent = lines[0] || '';
             } else {
