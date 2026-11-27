@@ -1,5 +1,5 @@
 import { getContext } from '../../../extensions.js';
-import { MODULE, BRIDGE_ID, DEFAULT_SETTINGS, settings, abortController, running, bridgeOnline, generateOverride, messages, currentView, setSettings, setAbortController, setRunning, setBridgeOnline, setMessages, setCurrentView, setGenerateOverride } from './index-state.js';
+import { MODULE, BRIDGE_ID, DEFAULT_SETTINGS, settings, abortController, running, bridgeOnline, generateOverride, messages, currentView, setSettings, setAbortController, setRunning, setBridgeOnline, setMessages, setCurrentView, setGenerateOverride, uiHooks } from './index-state.js';
 import { ctx, loadSettings, saveSettings, pingBridge, getProfiles, generateRawFn, getGenerateRaw, serializeHistory, rawGenerate } from './index-boot.js';
 import { typewrite, MODEL_FIELD, buildChatPayload, streamChatCompletion } from './index-stream.js';
 import { buildSystemPrompt } from './index-prompt.js';
@@ -69,11 +69,24 @@ export function paintPlanChip() {
     chip.className = `sta-plan-chip sta-plan-${p.status}`;
 }
 
+export function paintSubChip() {
+    if (!currentView) return;
+    const chip = currentView.root.querySelector('.sta-sub-chip');
+    if (!chip) return;
+    let subs = [];
+    try { subs = uiHooks.listSub ? uiHooks.listSub() : []; } catch { subs = []; }
+    const running = subs.filter(s => s.status === 'running').length;
+    if (!running) { chip.hidden = true; chip.textContent = ''; return; }
+    chip.hidden = false;
+    chip.textContent = `子任务 ${running}`;
+}
+
 export function updateStatus(text) {
     if (!currentView) return;
     currentView.status.textContent = text;
     currentView.root.classList.toggle('sta-offline', /离线|失败/.test(text));
     paintPlanChip();
+    paintSubChip();
 }
 
 export function addLog(type, text, meta = '', state = '', level = 0) {

@@ -10,10 +10,11 @@ import { parseToolCalls, repairJson, buildCall, extractFinal, sumChars, compactH
 import { HIGH_RISK_PATTERNS, RISK_META, riskOf, batchLines, executeTool, summarizeArgs, briefArgs } from './index-risk.js';
 import { runAgent } from './index-agent.js';
 import { html, buildPanel, bindPanel } from './index-ui.js';
-import { buildMenuEntry, togglePanel, setBusy, updateStatus, addLog, addStreamingDraft, paintPlanChip } from './index-ui2.js';
+import { buildMenuEntry, togglePanel, setBusy, updateStatus, addLog, addStreamingDraft, paintPlanChip, paintSubChip } from './index-ui2.js';
 import { askPlan, askApprovalBatch, askApproval, askPlanReview, submitTask, populateProfiles, syncSettingsUI } from './index-ui3.js';
+import { setSubSink, listSubs } from './index-sub.js';
 import { registerChatTools } from './index-tools.js';
-import { initSessions, flushSessions, getActiveSession, createSession, installSessionPersistence } from './index-sessions.js';
+import { initSessions, flushSessions, getActiveSession, getSession, createSession, installSessionPersistence } from './index-sessions.js';
 import { toolByName, toolsPrompt, activeTools } from './tools.js';
 import { ADV_TOOLS, advToolByName, advToolsPrompt, helperInfo } from './adv-tools.js';
 
@@ -41,6 +42,30 @@ export function initialize() {
     uiHooks.getSession = getActiveSession;
     uiHooks.flush = flushSessions;
     uiHooks.paintPlan = paintPlanChip;
+    uiHooks.paintSub = paintSubChip;
+    uiHooks.listSub = listSubs;
+
+    // 子任务完成通知的本地等价：结论写进父会话，下一轮 historyForContext 就能看见（DSH 的完成通知）
+    setSubSink((parentId, sub) => {
+        const session = getSession(parentId) || getActiveSession();
+        if (!session) return;
+        const head = sub.status === 'done' ? '完成' : sub.status === 'failed' ? '失败' : sub.status;
+        const body = String(sub.result || sub.error || '').trim();
+        const entry = {
+            role: 'assistant',
+            kind: 'final',
+            content: `[子任务 ${sub.name}] ${head}（${sub.steps} 步 / ${sub.toolsUsed} 次工具）\n${body}`.slice(0, 4000),
+            meta: `sub:${sub.name}`,
+        };
+        session.messages.push(entry);
+        session.updatedAt = Date.now();
+        try { flushSessions(); } catch { /* 卸载路径不抛 */ }
+        try {
+            if (currentView && currentView.log && currentView.log.dataset.sessId === session.id) {
+                addLog('final', `子任务 ${sub.name} ${head}：${body.slice(0, 400) || '（无输出）'}`, `${sub.steps} 步`);
+            }
+        } catch { /* 面板没建时忽略 */ }
+    });
 
     window.STAgent = {
         run: runAgent,

@@ -199,6 +199,7 @@ ${toolsPrompt()}${advToolsPrompt()}
 - 备份与回滚：\`snap.make\` / \`snap.list\` / \`snap.load\` / \`snap.restore\`；\`ops.journals\` / \`ops.undo\` 看本轮改了什么并整体撤回；\`backup.chats\`。
 - 其它：\`group.*\`（群聊）、\`persona.*\`（用户人设）、\`qr.*\`（快捷回复）、\`theme.*\` / \`bg.*\` / \`img.*\` / \`file.*\` / \`extension.*\`（主题、背景、图片、文件、扩展安装）、\`st.command\`（跑斜杠命令）、\`automation.*\` / \`audit.run\` / \`ext.maintain\`（自动化与自检）。
 - 计划与评审：\`plan.write\` → \`plan.submit\`（用户批准）→ 才写盘；\`plan.read\` 回读状态与正文，\`plan.reset\` 清掉。
+- 子任务：\`sub.spawn\`（默认只读、默认等结果）→ \`sub.list\` 看进度 → \`sub.result\` 取结论 → \`sub.continue\` 续跑 / \`sub.cancel\` 中止。
 - 自己这边：\`session.list\` / \`session.peek\` 看别的会话写到哪、\`usage.get\` 看上下文占多少、\`spill.*\` 取回被裁的大结果、\`todo.write\` / \`goal.*\` 管长任务。
 - 改之前先读：字段名不清楚就 \`char.fields\` / \`world.get\` / \`preset.prompts\`，凭猜写字段是这类操作最常见的坏账。
 - 成套写卡（一次把整张卡落地）：\`card.compose\` 是唯一入口。先不带 \`commit\` 调一次看预演（每条是新建还是更新、风险等级），确认后 \`commit:true\` 落盘——它会自动拍快照、逐条隔离错误，最后**回读核对**并把没写进去的条目/脚本/正则点名报回来。写坏了用 \`ops.undo\` 带返回的 \`journalId\` 整体回滚。
@@ -214,6 +215,16 @@ ${toolsPrompt()}${advToolsPrompt()}
 7. \`web.fetch\` / \`web.search\` 有 30 秒上限，超时返回 \`Error: tool call timed out after 30000ms\`。这是该请求本身太慢，别原样重试：换更小的目标、拆成几次取。
 
 
+## 子任务委派（sub.spawn / sub.list / sub.result / sub.continue / sub.cancel）
+1. 什么时候派：这件事**不需要主对话上下文**就能独立做完——核查一张卡的 MVU 八条齐不齐、把几个世界书条目的字段捞出来、批量读脚本找某个关键字、验证一条正则到底匹配不匹配。这类活派出去，主对话里就不会被几十条工具回执淹掉。
+   不适合派：要跟用户来回确认的、结论依赖主对话里某个约定或语气的。
+2. task 写完整再派：目标、范围、验收标准、已知约束、允许动哪些对象。子任务看不到当前对话，你省一句它就会跑偏一整轮。
+3. 默认只读（allowWrite=false）。要它在子任务里写卡/世界书/脚本/正则，显式 \`allowWrite:true\`——那一次 sub.spawn 调用本身会走批准，等价于一次性授权这类写活。
+4. 默认 wait=true 当场拿结论；只有你手上还有别的活（例如再派一个、先做别的核对）才用 wait:false，之后 \`sub.result\` 取。**不要轮询**：\`sub.list\` 看一眼状态就够了，反复 sub.result 只会把上下文塞满。
+5. 子任务不能派子任务（深度 1），也不能用 plan.*：任何未决决策它必须写进结论，由你拍板。
+6. 结论是证据不是判决：整合时必须自己复核一次（读回字段、看一眼名字/uid），再对用户下结论。子任务写下的东西要撤销用 \`ops.undo\`。
+7. 名字：默认 agent-1、agent-2…；同一个名字重复 spawn 会被拒（正在跑的那个要先 sub.cancel 或等它结束）。
+
 ## 计划模式（settings.planMode 打开时，「先规划后动手」）
 1. 顺序固定：\`plan.write\` 写整份计划（markdown，**必须以 # 标题开头**，写清改哪些对象、什么顺序、每步怎么验收、哪里可能回滚）→ \`plan.submit\` 提交评审（弹一张批准卡）→ 用户批准后写类工具才放行。
 2. 它是硬门不是建议：计划模式下，这份计划还处于 draft / pending / rejected 时，所有写类工具（char.edit、world.upsertEntry、script.upsert、card.compose、ops.apply …）会被直接挡回并返回 blocked。只读工具（char.get / world.get / script.list / chat.recent / usage.get）照常放行，先探索再写计划。
@@ -221,6 +232,7 @@ ${toolsPrompt()}${advToolsPrompt()}
 4. 用户没批准 = rejected，按他的意见把计划整份重写（\`plan.write\` 是整表替换，不追加），再 \`plan.submit\`，不要带着旧计划继续。
 5. 计划批准后 \`plan.read\` 仍是唯一能看全文的地方（正文只在未批准时贴在 system 末尾，批准后不再重复占上下文）。收尾或换活时 \`plan.reset\`。
 6. 不要拿 plan 当 todo：todo 是执行中的勾选清单（可以边干边改），plan 是动手前要过评审的整体方案（批准后就是承诺）。
+7. 子任务里 plan.* 与 sub.spawn 都不可用（深度与职责限制）：把它该做的决策写进结论交回来，别让子任务自己批计划。
 
 ## 长任务：任务清单与目标（todo.write / goal.*）
 1. 三步以上的活，先 \`todo.write\` 一次把清单写全。整表替换：每完成一项都把它标成 completed，然后把**完整列表**再发一遍（只发变更的条目会被判重复或漏项）。

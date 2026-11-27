@@ -102,7 +102,7 @@ export function buildChatPayload(chatMessages) {
  * 好处：完全是自定义 messages（Agent 的 system + 工具回执），不掺角色卡 / 世界书 / 生成预设。
  * 返回 { text, reasoning, streamed }。若服务端不支持流式，会返回一次性结果（streamed=false）。
  */
-export async function streamChatCompletion(list, { onText, onReasoning } = {}) {
+export async function streamChatCompletion(list, { onText, onReasoning, signal } = {}) {
     const c = ctx();
     const svc = c.ChatCompletionService;
     if (!svc?.processRequest) throw new Error('当前酒馆没有 ChatCompletionService，无法流式');
@@ -114,7 +114,8 @@ export async function streamChatCompletion(list, { onText, onReasoning } = {}) {
     const payload = buildChatPayload(chatMessages);
     if (!payload.model) throw new Error('当前 API 没有可用模型名（检查「API 连接」页）');
 
-    const gen = await svc.processRequest(payload, {}, true, abortController?.signal);
+    const sig = signal || abortController?.signal;   // 子任务带自己的 signal：父级停止不该打断子任务，反之亦然
+    const gen = await svc.processRequest(payload, {}, true, sig);
     if (typeof gen !== 'function') {
         const text = gen?.content ?? '';
         onText?.(text);
@@ -124,7 +125,7 @@ export async function streamChatCompletion(list, { onText, onReasoning } = {}) {
     let text = '';
     let reasoning = '';
     for await (const chunk of gen()) {
-        if (abortController?.signal?.aborted) break;
+        if (sig?.aborted) break;
         if (typeof chunk?.text === 'string' && chunk.text !== text) {
             text = chunk.text;
             onText?.(text);

@@ -32,7 +32,8 @@ export function buildPanel() {
                     <div class="sta-logo">SA</div>
                     <div>
                         <div class="sta-title">ST Agent</div>
-                        <div class="sta-sub"><span class="sta-dot"></span><span class="sta-status">连接中…</span><span class="sta-plan-chip" hidden></span><span class="sta-ver">v?</span></div>
+                        <div class="sta-sub"><span class="sta-dot"></span><span class="sta-status">连接中…</span><span class="sta-plan-chip" hidden></span>
+                <span class="sta-sub-chip" hidden></span><span class="sta-ver">v?</span></div>
                     </div>
                 </div>
                 <div class="sta-head-actions">

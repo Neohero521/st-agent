@@ -70,4 +70,6 @@ export const uiHooks = {
     getSession: null,    // () => 当前活动会话
     flush: null,         // () => 立刻把会话落盘（计划改动不节流）
     paintPlan: null,     // () => 刷新面板头部的计划徽标
+    paintSub: null,      // () => 刷新面板头部的子任务徽标
+    listSub: null,       // () => 当前子任务摘要数组（避免 ui2 依赖 index-sub 成环）
 };
