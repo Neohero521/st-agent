@@ -21,6 +21,7 @@ export const DEFAULT_SETTINGS = {
     showToolArgs: true,
     planMode: true,       // 模型给出 <plan> 且本轮有写操作时，先批准计划再执行
     batchConfirm: true,   // 同一轮的多个待批准操作合并成一张确认卡
+    usePreset: true,      // 每轮生成前读一次用户当前的 Chat Completion 预设（只取系统提示类块）
     streamMode: 'auto',   // auto | off：chat completion 后端逐字流式
     sessionLimit: 20,     // 最多保留多少个会话（超出按最后使用时间淘汰）
     sessionCharBudget: 1200000, // 会话总字符预算，超出后先压缩最旧会话
