@@ -41,11 +41,11 @@ fi
 mkdir -p "$EXT_DIR"
 rm -rf "$EXT_DIR/st-agent"
 mkdir -p "$EXT_DIR/st-agent"
-# 注意：必须把全部 .js 一起拷走 —— adv-tools-v14..v18 是探针按文件名动态 import 的，
+# 注意：必须把全部 .js 一起拷走 —— adv-tools-v14..v19 是探针按文件名动态 import 的，
 # 漏掉任何一个，对应那几层工具就静默失效（工具数会少一大截）
 cp "$SRC"/*.js "$SRC"/*.css "$EXT_DIR/st-agent/"
 LAYERS=$(ls -1 "$EXT_DIR"/st-agent/adv-tools-v*.js 2>/dev/null | wc -l)
-echo "  扩展层 adv-tools-v*.js 共 $LAYERS 个（应是 5 个：v14/v15/v16/v17/v18）"
+echo "  扩展层 adv-tools-v*.js 共 $LAYERS 个（应是 6 个：v14/v15/v16/v17/v18/v19）"
 echo "✓ 扩展 → $EXT_DIR/st-agent"
 
 # 3. 可选：磁盘桥接
@@ -64,4 +64,4 @@ fi
 
 echo ""
 echo "完成。刷新酒馆页面，右下角出现「Agent」悬浮球。"
-echo "自检：F12 控制台执行 STAgent.tools.length（无桥接 139，有桥接 148）"
+echo "自检：F12 控制台执行 STAgent.tools.length（无桥接 154，有桥接 163）"
