@@ -190,6 +190,14 @@
 
 .sta-plan { border-style: dashed; border-color: rgba(216, 178, 106, 0.35); color: #d9d2c3; }
 
+/* 重载后回放的计划行：和运行时的 .sta-plan 同一视觉语言，只是收起左边框 */
+.sta-plan-line {
+    border-left: 2px solid rgba(216, 178, 106, 0.45);
+    color: #d9d2c3;
+    background: rgba(216, 178, 106, 0.045);
+}
+.sta-plan-line .sta-log-head { color: var(--sta-gold); }
+
 .sta-tool { background: rgba(255, 255, 255, 0.025); }
 .sta-tool-ok { border-left: 2px solid var(--sta-ok); }
 .sta-tool-fail { border-left: 2px solid var(--sta-fail); }
@@ -411,6 +419,9 @@
     padding-left: 9px;
     border-left: 2px solid rgba(216, 178, 106, 0.32);
 }
+
+/* 酒馆全局样式里有 details{display:block}，会盖掉 [hidden]，必须显式兜底 */
+.sta-reasoning[hidden] { display: none !important; }
 .sta-reasoning summary {
     display: flex;
     align-items: center;
@@ -762,4 +773,12 @@ body.sta-lock { overflow: hidden; }
     .sta-log { padding: 14px 12px 8px; }
     .sta-log-item { font-size: 13px; }
     .sta-composer { padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* 写后刷新回执：淡淡一行，不抢内容 */
+.sta-refresh-note {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--sta-ok, #8fc98f);
+    opacity: 0.85;
 }
