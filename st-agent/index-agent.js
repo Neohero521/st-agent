@@ -64,11 +64,12 @@ export async function runAgent(task) {
 
     let steps = 0;
     let planRejects = 0;
-    const turnOps = [];      // 本校执行的工具动作，收尾时折成一条摘要
+    let finished = false;   // 正常收尾（模型给了结论）标记：避免和"撞到最大步数"混为一谈
+    const turnOps = [];      // 本轮执行的工具动作，收尾时折成一条摘要
     let finalText = '';
     try {
         while (steps < settings.maxSteps) {
-            if (abortController.signal.aborted) { addLog('error', '已停止'); break; }
+            if (abortController?.signal?.aborted) { addLog('error', '已停止'); break; }
             steps++;
             updateStatus(`第 ${steps} 步 · 生成中`);
 
@@ -120,6 +121,7 @@ export async function runAgent(task) {
                 const shown = final || reply || '（模型没有输出内容）';
                 draft.finalize({ keep: true, text: shown, reasoning: generated.reasoning });
                 messages.push({ role: 'assistant', content: reply });
+                finished = true;
                 finalText = shown;
                 // 续写次数用完了还没闭合：说清楚是上限不够，而不是模型不想写了
                 if (detectTruncation(reply, settings.maxTokens).truncated) {
@@ -138,7 +140,7 @@ export async function runAgent(task) {
             const planIntent = writeCalls.length > 0
                 || calls.some(call => call.name === 'ops.plan' || call.name === 'ops.apply');
             if (planMatch && settings.planMode && planIntent) {
-                const approved = await askPlan(planMatch[1].trim(), calls);
+                const approved = await askPlan(planMatch[1].trim(), calls, abortController?.signal);
                 if (!approved) {
                     planRejects++;
                     addLog('error', '计划未获批准，本轮没有执行任何操作');
@@ -158,7 +160,7 @@ export async function runAgent(task) {
                 appendTurn('assistant', planMatch[1].trim(), 'plan', '', { flush: false, render: false });
             }
 
-            if (abortController.signal.aborted) break;
+            if (abortController?.signal?.aborted) break;
 
             // —— 批次级确认：同一轮的待批准操作合并成一张卡（替代逐条弹窗） ——
             const needConfirm = calls
@@ -172,11 +174,11 @@ export async function runAgent(task) {
 
             let batchDecision = 'all';
             if (needConfirm.length === 1) {
-                batchDecision = (await askApproval(needConfirm[0].call)) ? 'all' : 'none';
+                batchDecision = (await askApproval(needConfirm[0].call, abortController?.signal)) ? 'all' : 'none';
             } else if (needConfirm.length > 1) {
                 batchDecision = settings.batchConfirm
-                    ? await askApprovalBatch(needConfirm)
-                    : (await askApproval(needConfirm[0].call)) ? 'all' : 'none';
+                    ? await askApprovalBatch(needConfirm, abortController?.signal)
+                    : (await askApproval(needConfirm[0].call, abortController?.signal)) ? 'all' : 'none';
             }
 
             const denied = new Set();
@@ -184,7 +186,7 @@ export async function runAgent(task) {
             if (batchDecision === 'safe') needConfirm.filter(({ level }) => level > 2).forEach(({ call }) => denied.add(call));
 
             for (const call of calls) {
-                if (abortController.signal.aborted) break;
+                if (abortController?.signal?.aborted) break;
                 // 被截断切坏的参数 JSON：宁可这一条不执行，也不能拿空参数去改用户的卡
                 if (call.parseError) {
                     const note = `参数不完整，已跳过：${call.parseError}`;
@@ -220,7 +222,7 @@ export async function runAgent(task) {
                 entry.setResult(payload, ok);
                 entry.setRefresh(takeRefreshNote());
                 // 动作摘要带上关键参数：刷新后光看"char.create"不知道建了哪张卡
-                const briefRaw = String(briefArgs(call.name, call.args) || '').replace(/\s+/g, ' ').trim();
+                const briefRaw = String(briefArgs(call.name, call.args) || '').replace(/[ \t\r\n]+/g, ' ').trim();
                 const briefUsable = briefRaw && briefRaw !== '{}' && briefRaw !== '[]' && briefRaw !== '无参数';
                 const briefCut = briefUsable ? `(${briefRaw.slice(0, 40)})` : '';
                 turnOps.push(call.name + (ok ? '' : '✗') + briefCut);
@@ -236,9 +238,9 @@ export async function runAgent(task) {
                 addLog('plan', `阶段性结论：${final}`);
                 appendTurn('assistant', `阶段性结论：${final}`, 'plan', '', { flush: false, render: false });
             }
-            if (abortController.signal.aborted) break;
+            if (abortController?.signal?.aborted) break;
         }
-        if (steps >= settings.maxSteps) {
+        if (!finished && steps >= settings.maxSteps) {
             addLog('error', `已达到最大步数 ${settings.maxSteps}，任务可能未完成`);
             appendTurn('assistant', `已达到最大步数 ${settings.maxSteps}，任务可能未完成`, 'error', '', { flush: false, render: false });
         }
