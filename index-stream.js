@@ -20,14 +20,22 @@ export function typewrite(text, emit, signal, speed = 0) {
     return new Promise((resolve, reject) => {
         const full = String(text ?? '');
         if (!full) { emit?.(full); return resolve(); }
+        // 页面在后台（手机切走 / 锁屏 / 切到别的 App）时，setTimeout 会被浏览器降频到 1 次/秒，
+        // 一段几十字的回复能把一轮卡十几秒。这时候别打动画了，直接一次性给出全文。
+        const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+        if (hidden) { emit?.(full); return resolve(); }
         const step = speed || (full.length > 8000 ? 12 : full.length > 3000 ? 6 : 3);
         const delay = full.length > 8000 ? 4 : 8;
         let i = 0;
+        const t0 = Date.now();
+        // 兜底预算：正常打完这段文字最多这么久。被节流时直接补全文，绝不让调用方无限等。
+        const budget = Math.ceil(full.length / step) * delay * 3 + 1200;
         const tick = () => {
             if (signal?.aborted) return reject(new Error('已中止'));
             i = Math.min(full.length, i + step);
             emit?.(full.slice(0, i));
             if (i >= full.length) return resolve();
+            if (Date.now() - t0 > budget) { emit?.(full); return resolve(); }
             setTimeout(tick, delay);
         };
         tick();

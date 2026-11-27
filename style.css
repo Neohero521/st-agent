@@ -190,6 +190,14 @@
 
 .sta-plan { border-style: dashed; border-color: rgba(216, 178, 106, 0.35); color: #d9d2c3; }
 
+/* 重载后回放的计划行：和运行时的 .sta-plan 同一视觉语言，只是收起左边框 */
+.sta-plan-line {
+    border-left: 2px solid rgba(216, 178, 106, 0.45);
+    color: #d9d2c3;
+    background: rgba(216, 178, 106, 0.045);
+}
+.sta-plan-line .sta-log-head { color: var(--sta-gold); }
+
 .sta-tool { background: rgba(255, 255, 255, 0.025); }
 .sta-tool-ok { border-left: 2px solid var(--sta-ok); }
 .sta-tool-fail { border-left: 2px solid var(--sta-fail); }
@@ -334,6 +342,38 @@
 
 .sta-hint { margin-top: 10px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.06); font-size: 11px; color: var(--sta-muted); }
 
+/* 输出上限：说明文字 + 快捷档位 */
+.sta-field-tip {
+    margin-top: 2px;
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: rgba(216, 178, 106, 0.55);
+}
+
+.sta-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+.sta-chip {
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(216, 178, 106, 0.22);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--sta-muted);
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    font-family: inherit;
+    transition: color 0.2s, border-color 0.2s, background 0.2s, transform 0.2s;
+}
+
+.sta-chip:hover { color: var(--sta-gold-2); border-color: rgba(216, 178, 106, 0.5); }
+
+.sta-chip.is-on {
+    color: #1a1409;
+    background: linear-gradient(135deg, var(--sta-gold-2), var(--sta-gold));
+    border-color: transparent;
+    box-shadow: 0 4px 12px rgba(216, 178, 106, 0.22);
+}
+
 /* ---------- v1.10：风险徽标 / 计划卡 / 思考行 / 流式光标 ---------- */
 
 .sta-risk-badge {
@@ -411,6 +451,9 @@
     padding-left: 9px;
     border-left: 2px solid rgba(216, 178, 106, 0.32);
 }
+
+/* 酒馆全局样式里有 details{display:block}，会盖掉 [hidden]，必须显式兜底 */
+.sta-reasoning[hidden] { display: none !important; }
 .sta-reasoning summary {
     display: flex;
     align-items: center;
@@ -527,6 +570,227 @@
 /* 面板打开时锁住背景滚动 */
 body.sta-lock { overflow: hidden; }
 
+/* ============================ 会话列表 ============================ */
+
+.sta-sessions {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(180deg, rgba(216, 178, 106, 0.05), transparent 140px), #0e1117;
+    animation: sta-sess-in 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes sta-sess-in {
+    from { opacity: 0; transform: translateX(14px); }
+    to { opacity: 1; transform: none; }
+}
+
+.sta-sessions[hidden] { display: none; }
+
+.sta-sessions-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid rgba(216, 178, 106, 0.14);
+    background: radial-gradient(120% 140% at 100% 0%, rgba(216, 178, 106, 0.10), transparent 72%);
+}
+
+.sta-sessions-title {
+    font-size: 13px;
+    letter-spacing: 0.14em;
+    color: var(--sta-gold-2);
+    font-weight: 600;
+}
+
+.sta-sessions-count {
+    font-size: 11px;
+    color: var(--sta-muted);
+    padding: 1px 7px;
+    border: 1px solid rgba(216, 178, 106, 0.2);
+    border-radius: 999px;
+}
+
+.sta-sessions-head .sta-icon-btn { margin-left: auto; }
+
+.sta-sessions-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 12px 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    scroll-behavior: smooth;
+}
+
+.sta-sessions-list::-webkit-scrollbar { width: 6px; }
+.sta-sessions-list::-webkit-scrollbar-thumb { background: rgba(216, 178, 106, 0.22); border-radius: 999px; }
+
+.sta-sess-item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 12px 11px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.025);
+    cursor: pointer;
+    transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.22s, background 0.22s, box-shadow 0.22s;
+}
+
+.sta-sess-item:hover {
+    transform: translateY(-1px);
+    border-color: rgba(216, 178, 106, 0.35);
+    background: rgba(216, 178, 106, 0.06);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.sta-sess-item.is-active {
+    border-color: rgba(216, 178, 106, 0.55);
+    background: linear-gradient(90deg, rgba(216, 178, 106, 0.12), rgba(216, 178, 106, 0.03));
+    box-shadow: inset 3px 0 0 var(--sta-gold), 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.sta-sess-mark {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background: rgba(216, 178, 106, 0.45);
+}
+
+.sta-sess-item.is-active .sta-sess-mark {
+    background: var(--sta-gold-2);
+    box-shadow: 0 0 8px rgba(243, 217, 163, 0.8);
+}
+
+.sta-sess-main { min-width: 0; flex: 1; }
+
+.sta-sess-title {
+    font-size: 13px;
+    color: var(--sta-text);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.45;
+}
+
+.sta-sess-item.is-active .sta-sess-title { color: var(--sta-gold-2); }
+
+.sta-sess-meta {
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--sta-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sta-sess-del {
+    flex: 0 0 auto;
+    width: 26px;
+    height: 26px;
+    display: grid;
+    place-items: center;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--sta-muted);
+    font-size: 12px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s, color 0.2s, border-color 0.2s, background 0.2s;
+}
+
+.sta-sess-item:hover .sta-sess-del { opacity: 1; }
+
+.sta-sess-del:hover {
+    color: var(--sta-fail);
+    border-color: rgba(224, 138, 138, 0.4);
+    background: rgba(224, 138, 138, 0.08);
+}
+
+.sta-sess-del.is-confirm {
+    opacity: 1;
+    width: auto;
+    padding: 0 8px;
+    color: #ffd9d9;
+    background: rgba(224, 138, 138, 0.22);
+    border-color: rgba(224, 138, 138, 0.6);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+}
+
+.sta-sess-rename {
+    width: 100%;
+    padding: 2px 6px;
+    border: 1px solid rgba(216, 178, 106, 0.5);
+    border-radius: 7px;
+    background: rgba(0, 0, 0, 0.35);
+    color: var(--sta-gold-2);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+}
+
+.sta-sess-empty {
+    margin: auto;
+    padding: 30px 10px;
+    text-align: center;
+    color: var(--sta-muted);
+    font-size: 12px;
+    display: grid;
+    gap: 6px;
+    justify-items: center;
+}
+
+.sta-sess-empty-ico {
+    font-size: 26px;
+    color: rgba(216, 178, 106, 0.35);
+    line-height: 1;
+}
+
+.sta-sess-empty-sub { font-size: 11px; opacity: 0.75; }
+
+.sta-sessions-foot {
+    padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid rgba(216, 178, 106, 0.14);
+}
+
+.sta-sessions-foot .sta-btn { width: 100%; }
+
+.sta-sessions-foot .sta-btn.primary {
+    color: var(--sta-gold-2);
+    background: linear-gradient(135deg, rgba(216, 178, 106, 0.16), rgba(216, 178, 106, 0.05));
+    border: 1px solid rgba(216, 178, 106, 0.42);
+    box-shadow: none;
+    letter-spacing: 0.06em;
+    transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1), background 0.24s, border-color 0.24s, box-shadow 0.24s;
+}
+
+.sta-sessions-foot .sta-btn.primary:hover {
+    background: linear-gradient(135deg, rgba(216, 178, 106, 0.26), rgba(216, 178, 106, 0.10));
+    border-color: rgba(243, 217, 163, 0.62);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.32), 0 0 0 1px rgba(216, 178, 106, 0.18);
+    transform: translateY(-1px);
+}
+
+.sta-sessions-foot .sta-btn.primary:active { transform: translateY(0) scale(0.99); }
+
+/* 历史回放：动作摘要比其他日志更轻 */
+.sta-ops-summary {
+    border-color: rgba(216, 178, 106, 0.12) !important;
+    background: rgba(255, 255, 255, 0.02) !important;
+}
+
+.sta-ops-summary .sta-log-head { color: var(--sta-muted); }
+.sta-ops-summary .sta-log-body { color: var(--sta-muted); font-size: 11.5px; }
+
+
 /* 移动端：全屏 + 隐藏悬浮球（改走酒馆扩展菜单入口） */
 @media (max-width: 720px), (pointer: coarse) {
     .sta-root { z-index: 20000; }
@@ -541,4 +805,39 @@ body.sta-lock { overflow: hidden; }
     .sta-log { padding: 14px 12px 8px; }
     .sta-log-item { font-size: 13px; }
     .sta-composer { padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* 写后刷新回执：淡淡一行，不抢内容 */
+.sta-refresh-note {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--sta-ok, #8fc98f);
+    opacity: 0.85;
+}
+
+/* 版本徽标：手机上"我装的到底是哪一版"必须能一眼看到 */
+.sta-ver {
+    margin-left: auto;
+    padding: 1px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--sta-line);
+    color: var(--sta-muted);
+    font-size: 10px;
+    letter-spacing: .2px;
+    line-height: 1.5;
+    opacity: .9;
+}
+
+/* 自检行：按钮 + 一行结论 */
+.sta-selfcheck-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+.sta-selfcheck-out {
+    margin: -2px 0 10px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px dashed var(--sta-line);
+    color: var(--sta-muted);
+    font-size: 11px;
+    line-height: 1.6;
+    word-break: break-all;
 }

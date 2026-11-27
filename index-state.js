@@ -1,17 +1,11 @@
-import { ctx, loadSettings, saveSettings, pingBridge, getProfiles, generateRawFn, getGenerateRaw, serializeHistory, rawGenerate } from './index-boot.js';
-import { typewrite, MODEL_FIELD, buildChatPayload, streamChatCompletion } from './index-stream.js';
-import { buildSystemPrompt } from './index-prompt.js';
-import { parseToolCalls, repairJson, buildCall, extractFinal, sumChars, compactHistory, stepGenerate } from './index-loop.js';
-import { HIGH_RISK_PATTERNS, RISK_META, riskOf, batchLines, executeTool, summarizeArgs, briefArgs } from './index-risk.js';
-import { runAgent } from './index-agent.js';
-import { html, buildPanel, bindPanel } from './index-ui.js';
-import { buildMenuEntry, togglePanel, setBusy, updateStatus, addLog, addStreamingDraft } from './index-ui2.js';
-import { askPlan, askApprovalBatch, askApproval, submitTask, populateProfiles, syncSettingsUI } from './index-ui3.js';
-import { registerChatTools } from './index-tools.js';
-import { refreshBridgeState, initialize } from './index.js';
-
-import { toolByName, toolsPrompt, activeTools } from './tools.js';
-import { ADV_TOOLS, advToolByName, advToolsPrompt, helperInfo } from './adv-tools.js';
+/**
+ * 全局状态（唯一真源）
+ *
+ * 约定：
+ *  - 各模块 import 时拿到的是 live binding，只读；
+ *  - 任何写入必须走本文件导出的 setXxx，不允许直接改导出变量；
+ *  - 本文件不 import 任何业务模块，避免循环依赖。
+ */
 
 export const MODULE = 'st-agent';
 export const BRIDGE_ID = 'st-agent-bridge';
@@ -20,14 +14,20 @@ export const DEFAULT_SETTINGS = {
     enabled: true,
     profileId: '',
     maxSteps: 20,
-    maxTokens: 4096,
+    maxTokens: 8192,   // 单次输出上限；写卡/长脚本体量下 4096 会半路被切，4096 时代常被截断
     approval: 'write', // auto | write | all
     registerChatTools: false,
     maxHistoryChars: 24000,
     showToolArgs: true,
     planMode: true,       // 模型给出 <plan> 且本轮有写操作时，先批准计划再执行
     batchConfirm: true,   // 同一轮的多个待批准操作合并成一张确认卡
+    usePreset: true,      // 每轮生成前读一次用户当前的 Chat Completion 预设（只取系统提示类块）
+    chatContext: true,    // 发送任务时把酒馆当前聊天的最近几楼一起带上（Agent 才知道"现在聊到哪"）
+    chatContextTurns: 8,  // 带最近几条聊天消息
     streamMode: 'auto',   // auto | off：chat completion 后端逐字流式
+    sessionLimit: 20,     // 最多保留多少个会话（超出按最后使用时间淘汰）
+    sessionCharBudget: 1200000, // 会话总字符预算，超出后先压缩最旧会话
+    schemaVersion: 3,     // 设置迁移标记
 };
 
 export let settings = { ...DEFAULT_SETTINGS };
@@ -35,8 +35,13 @@ export let abortController = null;
 export let running = false;
 export let bridgeOnline = false;
 export let generateOverride = null; // 调试/自定义后端：async (messages) => string
-export let messages = [];       // 当前会话（用于上下文）
+export let messages = [];       // 当前会话的运行时上下文（含 system，不持久化）
 export let currentView = null;  // 面板 DOM 引用
+
+/** 会话列表：[{ id, title, createdAt, updatedAt, cardName, messages:[{role,content}] }] */
+export let sessions = [];
+/** 当前会话 id；空串表示尚未创建 */
+export let activeSessionId = '';
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -49,3 +54,5 @@ export function setBridgeOnline(v) { bridgeOnline = v; }
 export function setMessages(v) { messages = v; }
 export function setCurrentView(v) { currentView = v; }
 export function setGenerateOverride(v) { generateOverride = v; }
+export function setSessions(v) { sessions = v; }
+export function setActiveSessionId(v) { activeSessionId = v; }

@@ -10,6 +10,7 @@ import { html, buildPanel, bindPanel } from './index-ui.js';
 import { buildMenuEntry, togglePanel, setBusy, updateStatus, addLog, addStreamingDraft } from './index-ui2.js';
 import { askPlan, askApprovalBatch, askApproval, submitTask, populateProfiles, syncSettingsUI } from './index-ui3.js';
 import { registerChatTools } from './index-tools.js';
+import { initSessions, flushSessions, getActiveSession, createSession, installSessionPersistence } from './index-sessions.js';
 import { toolByName, toolsPrompt, activeTools } from './tools.js';
 import { ADV_TOOLS, advToolByName, advToolsPrompt, helperInfo } from './adv-tools.js';
 
@@ -36,7 +37,7 @@ export function initialize() {
         executeTool,
         parseToolCalls,
         get tools() { return [...activeTools(), ...ADV_TOOLS]; },
-        mockGenerate: fn => { generateOverride = fn; },
+        mockGenerate: fn => { setGenerateOverride(typeof fn === 'function' ? fn : null); },
         get settings() { return settings; },
         stop: () => abortController?.abort(),
         open: () => togglePanel(true),
@@ -45,10 +46,17 @@ export function initialize() {
         streamChat: (list, handlers) => streamChatCompletion(list, handlers),
         askPlan,
         askApprovalBatch,
+        sessions: {
+            list: () => getActiveSession(),
+            create: title => createSession(title),
+        },
     };
     if (!settings.enabled) return;
     if (document.querySelector('.sta-root')) return; // 幂等：避免重复加载时叠加面板
     buildPanel();
+    initSessions();
+    installSessionPersistence();
+    window.addEventListener('beforeunload', flushSessions);
     buildMenuEntry();
     populateProfiles();
     syncSettingsUI();

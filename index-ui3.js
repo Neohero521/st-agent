@@ -11,12 +11,22 @@ import { buildMenuEntry, togglePanel, setBusy, updateStatus, addLog, addStreamin
 import { registerChatTools } from './index-tools.js';
 import { refreshBridgeState, initialize } from './index.js';
 
+/** 停止键按下时把等待中的确认卡收掉：否则那个 Promise 永远不 resolve，面板会一直转圈 */
+function bindAbort(signal, onAbort) {
+    if (!signal) return () => {};
+    if (signal.aborted) { onAbort(); return () => {}; }
+    const handler = () => onAbort();
+    signal.addEventListener('abort', handler, { once: true });
+    return () => signal.removeEventListener('abort', handler);
+}
+
 /**
  * 计划卡：模型给了 <plan> 且本轮要写东西时，先把计划和待执行清单摆出来，
  * 用户点「按此执行」才真的往下走（写卡器 plan-mode 的同款语义：未批准不落盘）。
  */
-export function askPlan(planText, calls) {
+export function askPlan(planText, calls, signal) {
     return new Promise(resolve => {
+        let settled = false;
         const card = document.createElement('div');
         card.className = 'sta-log-item sta-plan-card';
         card.innerHTML = `
@@ -57,11 +67,23 @@ export function askPlan(planText, calls) {
         currentView.log.appendChild(card);
         currentView.log.scrollTop = currentView.log.scrollHeight;
 
+        let unbind = () => {};
         const done = value => {
+            if (settled) return;
+            settled = true;
+            unbind();
             card.querySelectorAll('button').forEach(button => { button.disabled = true; });
             card.classList.add(value ? 'sta-plan-approved' : 'sta-plan-rejected');
             resolve(value);
         };
+        unbind = bindAbort(signal, () => {
+            if (settled) return;
+            settled = true;
+            card.querySelectorAll('button').forEach(button => { button.disabled = true; });
+            card.classList.add('sta-plan-rejected');
+            card.querySelector('.sta-plan-title').textContent = '已停止';
+            resolve(false);
+        });
         card.querySelector('.sta-plan-yes').addEventListener('click', () => done(true));
         card.querySelector('.sta-plan-no').addEventListener('click', () => done(false));
     });
@@ -71,8 +93,9 @@ export function askPlan(planText, calls) {
  * 批次确认：同一轮多个待批准操作只弹一次卡。
  * 返回 'all' | 'safe' | 'none'（safe = 只放行只读与普通写入，高危项跳过）。
  */
-export function askApprovalBatch(entries) {
+export function askApprovalBatch(entries, signal) {
     return new Promise(resolve => {
+        let settled = false;
         const box = currentView.root.querySelector('.sta-approval');
         box.hidden = false;
         box.classList.add('sta-approval-batch');
@@ -117,7 +140,11 @@ export function askApprovalBatch(entries) {
         const allow = box.querySelector('.sta-allow');
         const deny = box.querySelector('.sta-deny');
 
+        let unbind = () => {};
         const cleanup = value => {
+            if (settled) return;
+            settled = true;
+            unbind();
             box.hidden = true;
             box.classList.remove('sta-approval-batch');
             safeButton.remove();
@@ -132,17 +159,23 @@ export function askApprovalBatch(entries) {
         allow.addEventListener('click', onAllow);
         deny.addEventListener('click', onDeny);
         safeButton.addEventListener('click', onSafe);
+        unbind = bindAbort(signal, () => cleanup('none'));
     });
 }
 
-export function askApproval(call) {
+export function askApproval(call, signal) {
     return new Promise(resolve => {
+        let settled = false;
         const box = currentView.root.querySelector('.sta-approval');
         box.hidden = false;
         box.querySelector('.sta-approval-text').textContent = `待批准：${call.name}  ${summarizeArgs(call.args)}`;
         const allow = box.querySelector('.sta-allow');
         const deny = box.querySelector('.sta-deny');
+        let unbind = () => {};
         const cleanup = value => {
+            if (settled) return;
+            settled = true;
+            unbind();
             box.hidden = true;
             allow.removeEventListener('click', onAllow);
             deny.removeEventListener('click', onDeny);
@@ -152,6 +185,7 @@ export function askApproval(call) {
         const onDeny = () => cleanup(false);
         allow.addEventListener('click', onAllow);
         deny.addEventListener('click', onDeny);
+        unbind = bindAbort(signal, () => cleanup(false));
     });
 }
 
@@ -174,8 +208,17 @@ export function populateProfiles() {
     current.value = "";
     const apiLabel = (() => {
         try {
-            const oai = ctx().oai_settings || {};
-            const model = oai.chat_completion_source === 'openai' ? oai.openai_model : (oai.oai_settings?.custom_model || '酒馆主 API');
+            const c = ctx();
+            // ST 1.13+ 把 oai_settings 改名成 chatCompletionSettings；
+            // 模型名优先问 getChatCompletionModel()，它知道当前 source 该读哪个字段
+            let model = '';
+            try {
+                model = typeof c.getChatCompletionModel === 'function' ? (c.getChatCompletionModel() || '') : '';
+            } catch { model = ''; }
+            if (!model) {
+                const oai = c.chatCompletionSettings || c.oai_settings || {};
+                model = oai.openai_model || '';
+            }
             return `当前酒馆 API${model ? '（' + model + '）' : ''}`;
         } catch {
             return '当前酒馆 API';
@@ -197,10 +240,18 @@ export function populateProfiles() {
 
 export function syncSettingsUI() {
     if (!currentView) return;
-    currentView.maxSteps.value = settings.maxSteps;
-    currentView.policy.value = settings.approval;
-    currentView.streamMode.value = settings.streamMode;
-    currentView.planMode.checked = !!settings.planMode;
-    currentView.batchConfirm.checked = !!settings.batchConfirm;
-    currentView.regTools.checked = !!settings.registerChatTools;
+    // 面板结构以后还会加字段：这里一律判空，避免某个控件缺失就把整条同步链打断
+    if (currentView.maxSteps) currentView.maxSteps.value = settings.maxSteps;
+    if (currentView.maxTokens) currentView.maxTokens.value = settings.maxTokens;
+    currentView.root?.querySelectorAll('.sta-chip')?.forEach(btn => {
+        btn.classList.toggle('is-on', Number(btn.dataset.tokens) === Number(settings.maxTokens));
+    });
+    if (currentView.policy) currentView.policy.value = settings.approval;
+    if (currentView.streamMode) currentView.streamMode.value = settings.streamMode;
+    if (currentView.usePreset) currentView.usePreset.checked = settings.usePreset !== false;
+    if (currentView.chatContext) currentView.chatContext.checked = settings.chatContext !== false;
+    if (currentView.chatTurns) currentView.chatTurns.value = Number(settings.chatContextTurns) || 8;
+    if (currentView.planMode) currentView.planMode.checked = !!settings.planMode;
+    if (currentView.batchConfirm) currentView.batchConfirm.checked = !!settings.batchConfirm;
+    if (currentView.regTools) currentView.regTools.checked = !!settings.registerChatTools;
 }

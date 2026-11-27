@@ -10,7 +10,17 @@ import { askPlan, askApprovalBatch, askApproval, submitTask, populateProfiles, s
 import { registerChatTools } from './index-tools.js';
 import { refreshBridgeState, initialize } from './index.js';
 import { toolByName, toolsPrompt, activeTools } from './tools.js';
+import { refreshAfterWrite } from './index-sync.js';
 import { ADV_TOOLS, advToolByName, advToolsPrompt, helperInfo } from './adv-tools.js';
+
+/* ------------------------------ 写后刷新回执 ------------------------------ */
+// 界面上"这步到底同步了没有"要能给用户看到：手机端最常问的就是"为什么我还要刷新一遍"。
+let lastRefreshNote = [];
+export function takeRefreshNote() {
+    const v = lastRefreshNote;
+    lastRefreshNote = [];
+    return Array.isArray(v) ? v : [];
+}
 
 /* ------------------------------ 风险分级 ------------------------------ */
 
@@ -63,7 +73,18 @@ export async function executeTool(call) {
     const tool = toolByName(call.name) || advToolByName(call.name);
     if (!tool) throw new Error(`未知工具：${call.name}`);
     if (call.parseError) throw new Error(`参数不是合法 JSON：${call.parseError}`);
-    return tool.run(call.args || {});
+
+    const result = await tool.run(call.args || {});
+
+    // 写类工具：执行完立刻把酒馆 UI 同步过来，用户不用手动刷新页面
+    try {
+        lastRefreshNote = await refreshAfterWrite(call.name, riskOf(call));
+    } catch (error) {
+        lastRefreshNote = [];
+        console.warn('[st-agent] 写后刷新异常：', error && error.message);
+    }
+
+    return result;
 }
 
 export function summarizeArgs(args) {
