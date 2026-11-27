@@ -11,6 +11,18 @@ import { askPlan, askApprovalBatch, askApproval, submitTask, populateProfiles, s
 import { registerChatTools } from './index-tools.js';
 import { refreshBridgeState, initialize } from './index.js';
 
+/** 用户是不是还贴着底部在看。贴底才自动滚——不然往上翻历史会被一直拽回来。 */
+function nearBottom(el) {
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 90;
+}
+
+function stickToBottom(force = false) {
+    const log = currentView && currentView.log;
+    if (!log) return;
+    if (force || nearBottom(log)) log.scrollTop = log.scrollHeight;
+}
+
 export function buildMenuEntry() {
     const menu = document.getElementById('extensionsMenu');
     if (!menu) {
@@ -95,7 +107,7 @@ export function addLog(type, text, meta = '', state = '', level = 0) {
     };
     if (meta) body.textContent = `${text}  ${meta}`;
     currentView.log.appendChild(entry);
-    currentView.log.scrollTop = currentView.log.scrollHeight;
+    stickToBottom();
     return api;
 }
 
@@ -110,7 +122,7 @@ export function addStreamingDraft() {
         </details>
         <div class="sta-log-body"><span class="sta-caret"></span></div>`;
     currentView.log.appendChild(el);
-    currentView.log.scrollTop = currentView.log.scrollHeight;
+    stickToBottom(true);
 
     const body = el.querySelector('.sta-log-body');
     const caret = el.querySelector('.sta-caret');
@@ -119,7 +131,7 @@ export function addStreamingDraft() {
     const reasoningTitle = el.querySelector('.sta-reasoning-title');
     const reasoningBody = el.querySelector('.sta-reasoning-body');
 
-    const timer = setInterval(() => { currentView.log.scrollTop = currentView.log.scrollHeight; }, 200);
+    const timer = setInterval(() => stickToBottom(), 200);
     let firstText = true;
 
     const api = {
@@ -148,7 +160,7 @@ export function addStreamingDraft() {
                 reasoningTitle.textContent = '思考过程';
             } else {
                 // running 摘要：取最后一行，够长就截尾
-                const tail = String(text).trim().split('\n').filter(Boolean).pop() || '';
+                const tail = String(text).trim().split(String.fromCharCode(10)).filter(Boolean).pop() || '';
                 reasoningTitle.textContent = tail.length > 48 ? '…' + tail.slice(-46) : (tail || '思考中…');
             }
         },
@@ -186,7 +198,7 @@ export function addStreamingDraft() {
                 item.innerHTML = '<summary><span class="sta-reasoning-title">思考过程</span></summary><div class="sta-reasoning-body"></div>';
                 item.querySelector('.sta-reasoning-body').textContent = reasoning;
                 currentView.log.appendChild(item);
-                currentView.log.scrollTop = currentView.log.scrollHeight;
+                stickToBottom();
             }
         },
         cleanup() {
