@@ -84,6 +84,14 @@ export function addLog(type, text, meta = '', state = '', level = 0) {
             body.textContent = text;
             entry.dataset.status = ok ? 'ok' : 'fail';
         },
+        // 写类工具同步完酒馆界面后打个小标：用户一眼确认"确实刷了，不用再手动刷新"
+        setRefresh(list) {
+            if (!Array.isArray(list) || !list.length) return;
+            const tag = document.createElement('div');
+            tag.className = 'sta-refresh-note';
+            tag.textContent = '已同步界面：' + list.join('、');
+            entry.appendChild(tag);
+        },
     };
     if (meta) body.textContent = `${text}  ${meta}`;
     currentView.log.appendChild(entry);
@@ -159,10 +167,13 @@ export function addStreamingDraft() {
             caret.remove();
             if (keep) {
                 body.textContent = text;
-                if (!reasoningBox.hidden) {
+                // 没有思考内容就整块摘掉：留着空的 details 会在卡片里撑出一段空白
+                if (!reasoningBox.hidden && reasoning) {
                     reasoningBox.open = false;
                     reasoningBox.classList.add('sta-reasoning-done');
                     reasoningTitle.textContent = '思考过程';
+                } else {
+                    reasoningBox.remove();
                 }
                 el.classList.remove('sta-stream');
                 el.classList.add('sta-final');
