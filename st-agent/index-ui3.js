@@ -198,6 +198,10 @@ export function populateProfiles() {
 export function syncSettingsUI() {
     if (!currentView) return;
     currentView.maxSteps.value = settings.maxSteps;
+    if (currentView.maxTokens) currentView.maxTokens.value = settings.maxTokens;
+    currentView.root?.querySelectorAll('.sta-chip')?.forEach(btn => {
+        btn.classList.toggle('is-on', Number(btn.dataset.tokens) === Number(settings.maxTokens));
+    });
     currentView.policy.value = settings.approval;
     currentView.streamMode.value = settings.streamMode;
     if (currentView.usePreset) currentView.usePreset.checked = settings.usePreset !== false;
