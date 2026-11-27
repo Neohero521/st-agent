@@ -10,6 +10,7 @@
  */
 
 import { ctx, saveSettings } from './index-boot.js';
+import { journalSave, journalMerge } from './index-persist.js';
 import {
     MODULE, settings, currentView, running,
     sessions, activeSessionId,
@@ -28,6 +29,28 @@ const LEVEL_LABEL = { 1: '只读', 2: '写入', 3: '高危' };
 const LEVEL_CLS = { 1: 'sta-risk-1', 2: 'sta-risk-2', 3: 'sta-risk-3' };
 
 let _saveTimer = null;
+let lastRecovered = 0;          // 上次启动时从 localStorage 副本补回了多少会话/更长的记录
+let lastJournalSavedAt = 0;     // 副本最近一次写入时间，自检要显示
+
+/** 同步写一份 localStorage 副本（不依赖定时器，手机切后台也不会被吞） */
+function touchJournal() {
+    const res = journalSave(sessions, activeSessionId);
+    lastJournalSavedAt = res && res.ok ? (res.savedAt || Date.now()) : 0;
+    return res;
+}
+
+/** 给面板自检用：当前到底存了几条、副本有没有在写 */
+export function sessionDiag() {
+    let msgs = 0;
+    for (const s of sessions) msgs += Array.isArray(s.messages) ? s.messages.length : 0;
+    return {
+        sessions: sessions.length,
+        msgs,
+        activeSessionId,
+        recovered: lastRecovered,
+        journalSavedAt: lastJournalSavedAt,
+    };
+}
 
 /* ------------------------------ 基础工具 ------------------------------ */
 
@@ -98,12 +121,28 @@ export function initSessions() {
     setSessions(cleaned);
 
     const savedActive = typeof settings.activeSessionId === 'string' ? settings.activeSessionId : '';
-    const exists = cleaned.some(s => s.id === savedActive);
-    setActiveSessionId(exists ? savedActive : (cleaned[0] ? cleaned[0].id : ''));
+    // 后端存档 + localStorage 副本合并：
+    // 手机端 saveSettings 被后台挂死时只写了半截甚至没写，副本能把丢的补回来。
+    const merged = journalMerge(cleaned, savedActive);
+    setSessions(merged.sessions);
+    lastRecovered = merged.recovered || 0;
+    const activeId = merged.activeSessionId && merged.sessions.some(s => s.id === merged.activeSessionId)
+        ? merged.activeSessionId
+        : (merged.sessions[0] ? merged.sessions[0].id : '');
+    setActiveSessionId(activeId);
+    // 合并完立刻回写两边，别让副本继续比后端新
+    touchJournal();
+    // 副本补回来的内容要马上写进酒馆存档：否则后端一直是空的，每次都只能靠副本救，
+    // 用户一旦清了浏览器数据就真没了。settings 还没 ready 时酒馆会自己排一次保存，不阻断启动。
+    try {
+        settings.sessions = sessions;
+        settings.activeSessionId = activeSessionId;
+        saveSettings();
+    } catch { /* 启动早期保存失败不影响本次使用，副本已写 */ }
 
     renderSessionList();
     renderSessionLog(getActiveSession());
-    return cleaned;
+    return merged.sessions;
 }
 
 /**
@@ -111,6 +150,7 @@ export function initSessions() {
  * 失败只降级（保留内存态），不阻断用户操作。
  */
 export function saveSessions() {
+    touchJournal();
     clearTimeout(_saveTimer);
     _saveTimer = setTimeout(() => {
         try {
@@ -128,6 +168,7 @@ export function saveSessions() {
 export function flushSessions() {
     clearTimeout(_saveTimer);
     _saveTimer = null;
+    touchJournal();
     try {
         prune();
         settings.sessions = sessions;
@@ -305,6 +346,8 @@ export function appendTurn(role, content, kind, meta = '', opts = {}) {
     if (s.title === '新对话' || !s.title) s.title = autoTitle(text);
     if (!s.cardName) s.cardName = currentCardName();
     // 立即落盘：手机端切后台/杀进程时 beforeunload 不一定触发，靠防抖必丢
+    // 副本同步写一遍：不走定时器、不受后台节流影响，这是「一说话记录就没了」的最后一道保险
+    touchJournal();
     if (opts.flush === false) saveSessions();
     else flushSessions();
     if (opts.render === false) return;
