@@ -40,7 +40,8 @@ import { TOOLS as TOOLS_V19 } from './adv-tools-v19.js';
 import { TOOLS as TOOLS_V20 } from './adv-tools-v20.js';
 import { TOOLS as TOOLS_V21 } from './adv-tools-v21.js';
 import { TOOLS as TOOLS_V22 } from './adv-tools-v22.js';
+import { TOOLS as TOOLS_KIT } from './tools-kit.js';
 
-for (const group of [TOOLS_V14, TOOLS_V15, TOOLS_V16, TOOLS_V17, TOOLS_V18, TOOLS_V19, TOOLS_V20, TOOLS_V21, TOOLS_V22]) {
+for (const group of [TOOLS_V14, TOOLS_V15, TOOLS_V16, TOOLS_V17, TOOLS_V18, TOOLS_V19, TOOLS_V20, TOOLS_V21, TOOLS_V22, TOOLS_KIT]) {
     if (Array.isArray(group)) ADV_TOOLS.push(...group);
 }
