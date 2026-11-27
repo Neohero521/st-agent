@@ -229,6 +229,8 @@ export function bindPanel(root) {
     sessionsBtn.addEventListener('click', () => { sessPanel.hidden ? openSessions() : closeSessions(); });
     sessClose.addEventListener('click', closeSessions);
     newSess.addEventListener('click', () => {
+        // 跑任务时开新对话会重绘日志区，把挂在上面的批准卡一起冲掉
+        if (running) { addLog('error', '任务进行中，先停止再开新对话'); return; }
         createSession();
         closeSessions();
         input.focus();
@@ -257,6 +259,7 @@ export function bindPanel(root) {
             event.stopPropagation();
             if (pendingDelete && pendingDelete.id === id) {
                 clearPendingDelete();
+                if (running) { addLog('error', '任务进行中，先停止再删除会话'); return; }
                 deleteSession(id);
                 return;
             }
@@ -273,6 +276,7 @@ export function bindPanel(root) {
 
         clearPendingDelete();
         if (switchSession(id)) closeSessions();
+        else if (running) addLog('error', '任务进行中，先停止再切换会话（否则待确认的卡会丢）');
     });
 
     // 双击标题就地改名
