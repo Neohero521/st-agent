@@ -70,10 +70,17 @@ function pickName(attrs) {
     return '';
 }
 
-/** 找到一个开标签的 '>' 位置（返回 '>' 之后的下标，找不到返回 -1） */
+/** 找到一个开标签的 '>' 位置（返回 '>' 之后的下标，找不到返回 -1）
+ *  必须跳过引号里的 '>'：属性值里带 '>'（例如 data="a>b"）时，
+ *  停在第一个 '>' 会把标签截断，后面整条调用跟着断。
+ */
 function headEndOf(src, from) {
+    let q = '';
     for (let i = from; i < src.length; i++) {
-        if (src[i] === '>') return i + 1;
+        const ch = src[i];
+        if (q) { if (ch === q) q = ''; continue; }
+        if (ch === '"' || ch === "'") { q = ch; continue; }
+        if (ch === '>') return i + 1;
     }
     return -1;
 }
@@ -88,7 +95,19 @@ function scanCallBlocks(src) {
         if (open < 0) break;
         const headEnd = headEndOf(src, open + 10);
         if (headEnd < 0) break;
-        const close = low.indexOf('</tool_call', headEnd);
+        let close = low.indexOf('</tool_call', headEnd);
+        // 正文里本身就可能写着 </tool_call>（写卡器脚本 / 正则内容常带这个串），
+        // 那样会提前闭合、把参数 JSON 断在半路。若按这个闭合点切出来的 JSON 是不完整的，
+        // 就继续往后找闭合，最多试 4 个；真找不到完整的还能退回"未闭合"分支。
+        for (let tries = 0; close >= 0 && tries < 4; tries++) {
+            const cut = src.slice(headEnd, close).trim();
+            if (!cut) break;
+            if (cut[0] !== '{' && cut[0] !== '[') break;
+            if (tryJson(cut)) break;
+            const next = low.indexOf('</tool_call', close + 11);
+            if (next < 0) break;
+            close = next;
+        }
         const closeEnd = close < 0 ? -1 : headEndOf(src, close + 11);
         if (closeEnd < 0) {
             // 未闭合：交给截断检测，这里只记录残块
@@ -172,24 +191,51 @@ export function repairJson(raw) {
 export function buildCall(name, rawArgs) {
     const trimmed = String(rawArgs || '').trim();
     if (!trimmed) return { name, args: {}, raw: '' };
+    let parsed = null;
+    let err = '';
     try {
-        return { name, args: JSON.parse(trimmed), raw: '' };
+        parsed = JSON.parse(trimmed);
     } catch (e) {
         try {
-            return { name, args: JSON.parse(repairJson(trimmed)), raw: '' };
+            parsed = JSON.parse(repairJson(trimmed));
         } catch (e2) {
-            return { name, args: {}, parseError: e2.message, raw: trimmed.slice(0, 200) };
+            err = e2.message;
         }
     }
+    if (!err) {
+        // 参数必须是个对象：模型偶尔把参数写成数组或裸字符串，硬塞给工具只会静默改错东西，
+        // 宁可这一条判失败、把错误回给模型让它重发。
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return { name, args: parsed, raw: '' };
+        }
+        err = '参数不是 JSON 对象';
+    }
+    return { name, args: {}, parseError: err, raw: trimmed.slice(0, 200) };
 }
 
 export function extractFinal(text) {
     const src = String(text || '');
-    const m = /<final>([\s\S]*?)<\/final>/i.exec(src);
-    if (m) return m[1].trim();
+    const blocks = [];
+    const re = /<final>([\s\S]*?)<\/final>/gi;
+    let m;
+    while ((m = re.exec(src)) !== null) {
+        const t = m[1].trim();
+        if (t) blocks.push(t);
+    }
+    if (blocks.length) {
+        // 模型有时把结论分两段写（第一段被切断、续写又补一段）。只取第一段会丢一半结论；
+        // 后段只是前段的重复时也不要重复摆两遍。
+        if (blocks.length === 1) return blocks[0];
+        const uniq = [];
+        for (const b of blocks) {
+            if (uniq.some(u => u.includes(b))) continue;
+            uniq.push(b);
+        }
+        return uniq.join(String.fromCharCode(10, 10));
+    }
     // 没有闭合：说明这一轮被切在 final 中间。别把半句话吐成普通回复，
     // 至少把标签剥掉、把已经写出来的部分当结论显示（续写会在上层把它接完整）。
-    const open = src.toLowerCase().indexOf('<final>');
+    const open = src.toLowerCase().lastIndexOf('<final>');
     if (open >= 0) {
         const tail = src.slice(open + 7).replace(/<\/final[^>]*>/i, '').trim();
         if (tail) return tail;
@@ -203,14 +249,39 @@ export function sumChars(list) {
 
 export function compactHistory(list) {
     const cap = Number(settings.maxHistoryChars) || 24000;
-    if (sumChars(list) <= cap) return list;
-    const compacted = list.map((m, i) => {
+    const arr = Array.isArray(list) ? list : [];
+    if (sumChars(arr) <= cap) return arr;
+    // ① 先把长条目压短：早期工具结果没必要一直占着窗口。
+    //    最近 3 条一律不动——刚拿到的工具结果就是这一步判断的依据，截短等于让模型瞎猜。
+    const compacted = arr.map((m, i) => {
         if (i <= 1) return m; // system + 首条任务
+        if (i >= arr.length - 3) return m;
         if (typeof m.content !== 'string') return m;
         if (m.content.length <= 600) return m;
         return { ...m, content: m.content.slice(0, 400) + `\n…（早期结果已压缩，原 ${m.content.length} 字符）` };
     });
-    return compacted;
+    if (sumChars(compacted) <= cap) return compacted;
+    // ② 压完还超，就硬裁：system 必留，其余按「从最近往前」装到预算满为止。
+    //    长会话（几十轮 + 每步 12k 的工具回执）不裁的话，每一步都会顶到模型窗口，
+    //    表现就是频繁 400 / 半句截断，而不是"模型不想写"。
+    const head = compacted[0] && compacted[0].role === 'system' ? [compacted[0]] : [];
+    const body = compacted.slice(head.length);
+    // system 本身就常占两万多字，不能拿总预算去减它——否则历史会被裁到只剩一条。
+    // 给对话部分保底 8k 字符，够容纳最近几步的工具回执与结论。
+    const bodyCap = Math.max(8000, cap - sumChars(head));
+    const keep = [];
+    let used = 0;
+    for (let i = body.length - 1; i >= 0; i--) {
+        const len = typeof body[i].content === 'string' ? body[i].content.length : 0;
+        if (keep.length >= 2 && used + len > bodyCap) break;
+        keep.unshift(body[i]);
+        used += len;
+    }
+    if (keep.length < body.length) {
+        // 交代一句被省掉的部分：不写的话模型会以为上下文凭空断了
+        keep.unshift({ role: 'user', content: `（更早的 ${body.length - keep.length} 条上下文已省略，只为控住窗口）` });
+    }
+    return [...head, ...keep];
 }
 
 /* ---------------------- 截断检测与自动续写 ---------------------- */
