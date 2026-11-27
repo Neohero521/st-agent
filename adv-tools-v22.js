@@ -11,6 +11,7 @@
 
 import { loadBook, setEntry, getEntries, entryFields } from './adv-lib-world.js';
 import { c } from './adv-lib-core.js';
+import { toPlacement } from './tools-set-c.js';
 
 /* ------------------------------ 固定模板 ------------------------------ */
 
@@ -136,7 +137,7 @@ function statusBarHtml(chars) {
     const first = (Array.isArray(chars) && chars[0]) || '角色';
     return [
         '<div class="mvustatus">',
-        '  <div class="mvustatus-title">{{char}} · ' + first + '</div>',
+        '  <div class="mvustatus-title">' + first + '</div>',
         '  <div class="mvustatus-row"><span>世界</span><b><%- getvar("stat_data.世界.日期", { defaults: "未知" }) %> <%- getvar("stat_data.世界.时间", { defaults: "" }) %></b></div>',
         '  <div class="mvustatus-row"><span>好感度</span><b><%- getvar("stat_data.' + first + '.好感度", { defaults: 0 }) %></b></div>',
         '</div>',
@@ -268,6 +269,40 @@ function normalizeSchema(src) {
         }
     }
     return out.replace(/\n{3,}/g, '\n\n').trim() + '\n';
+}
+
+/* ------------------------------ 酒馆助手脚本位写入 ------------------------------ */
+
+/**
+ * 写/更新角色卡「酒馆助手」脚本（data.extensions.tavern_helper.scripts）。
+ * 字段严格对齐 JS-Slash-Runner 的 Script 结构（src/type/scripts.ts）：
+ *   type='script' / enabled / name / id / content / info / button{enabled, buttons[]} / data{} / export_with{data,button}
+ * 少字段会被 zod 默认补上，但存进卡里时带全字段，导出到别人手里才不会丢按钮或数据。
+ * 判重按 id 优先、其次 name——id 是酒馆助手识别固定脚本的唯一依据（mvu-schema / 961f366d… 都靠它）。
+ */
+async function putScript(ctx, local, av, item) {
+    const data = local.data || {};
+    const ext = (data.extensions = data.extensions || {});
+    const th = (ext.tavern_helper = ext.tavern_helper || {});
+    if (!Array.isArray(th.scripts)) th.scripts = [];
+    if (!th.variables || typeof th.variables !== 'object') th.variables = {};
+    const scripts = th.scripts.slice();
+    const base = Object.assign({ type: 'script', enabled: true, content: '', info: '', button: { enabled: true, buttons: [] }, data: {}, export_with: { data: true, button: true } }, item);
+    Object.keys(base).forEach(k => { if (base[k] === undefined) delete base[k]; });
+    const idx = scripts.findIndex(s => s && ((base.id && s.id === base.id) || (base.name && String(s.name || '') === base.name)));
+    if (idx >= 0) scripts[idx] = Object.assign({}, scripts[idx], base);
+    else scripts.push(base);
+    const nested = { extensions: { tavern_helper: { scripts, variables: th.variables } } };
+    const body = { avatar: av, data: Object.assign({}, data, nested), extensions: nested.extensions };
+    const res = await fetch('/api/characters/merge-attributes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`写入脚本位失败：HTTP ${res.status}`);
+    Object.assign(local, { data: Object.assign({}, data, nested), extensions: nested.extensions });
+    ctx.saveSettingsDebounced?.();
+    return { created: idx < 0, id: base.id, name: base.name, bytes: String(base.content || '').length, scripts: scripts.length };
 }
 
 /* ------------------------------ 工具 ------------------------------ */
@@ -480,25 +515,40 @@ export const TOOLS = [
             if (!a.schema || !String(a.schema).trim()) throw new Error('mvu.schema 需要 schema 源码');
             const code = normalizeSchema(a.schema);
             if (!/z\.object/.test(code)) throw new Error('schema 里没有 z.object：确认这是 zod 结构定义');
-            const data = local.data || {};
-            const ext = (data.extensions = data.extensions || {});
-            const th = (ext.tavern_helper = ext.tavern_helper || {});
-            const scripts = Array.isArray(th.scripts) ? th.scripts.slice() : [];
-            const item = { type: 'script', enabled: true, name: '变量结构', id: 'mvu-schema', content: code, info: '', button: { enabled: true, buttons: [] }, data: {} };
-            const idx = scripts.findIndex(s => s && (s.id === 'mvu-schema' || /变量结构/.test(String(s.name || ''))));
-            if (idx >= 0) scripts[idx] = Object.assign({}, scripts[idx], item);
-            else scripts.push(item);
-            const nested = { extensions: { tavern_helper: { scripts } } };
-            const body = { avatar: av, data: Object.assign({}, data, nested), extensions: nested.extensions };
-            const res = await fetch('/api/characters/merge-attributes', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-            });
-            if (!res.ok) throw new Error(`写入失败：HTTP ${res.status}`);
-            Object.assign(local, { data: Object.assign({}, data, nested), extensions: nested.extensions });
-            ctx.saveSettingsDebounced?.();
-            return { ok: true, avatar: av, id: 'mvu-schema', bytes: code.length, created: idx < 0, registered: /registerMvuSchema\s*\(\s*Schema\s*\)/.test(code) };
+            const item = { type: 'script', enabled: true, name: '变量结构', id: 'mvu-schema', content: code, info: '自动生成的 MVU 变量结构脚本。', button: { enabled: true, buttons: [] }, data: {}, export_with: { data: true, button: true } };
+            const out = await putScript(ctx, local, av, item);
+            return { ok: true, avatar: av, id: 'mvu-schema', bytes: code.length, created: out.created, scripts: out.scripts, registered: /registerMvuSchema\s*\(\s*Schema\s*\)/.test(code), note: 'MVU 生效还需要本体脚本：调 mvu.runtime 写 bundle.js 那一份（id 961f366d-e403-45c2-8155-3d14ec86de53）' };
+        },
+    },
+    {
+        name: 'mvu.runtime',
+        kind: 'write',
+        desc: '写 MVU 本体脚本（酒馆助手脚本位里的第二份，id=961f366d-e403-45c2-8155-3d14ec86de53、name=MVU）。内容只有一行 import 指向 MagVarUpdate 的 bundle.js，并带上 5 个隐藏按钮（重新处理变量 / 重新读取初始变量 / 快照楼层 / 重演楼层 / 重试额外模型解析 / 清除旧楼层变量）。很多卡「schema 写了但变量不动」就是因为卡里只有变量结构、没有这份本体：MagVarUpdate 的运行时根本没挂上。',
+        params: {
+            card: 'string 头像文件名，默认当前角色',
+            bundle_url: 'string 可选，替换 bundle.js 的 import 地址（默认 MagVarUpdate artifact）',
+        },
+        run: async a => {
+            const ctx = c();
+            const av = a.card || ctx.characterId;
+            const local = (ctx.characters || []).find(x => x.avatar === av);
+            if (!local) throw new Error(`找不到角色卡「${av}」`);
+            const url = String(a.bundle_url || 'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js').trim();
+            if (!/^https?:\/\//.test(url)) throw new Error('bundle_url 必须是 http(s) 地址');
+            const buttons = ['重新处理变量', '重新读取初始变量', '快照楼层', '重演楼层', '重试额外模型解析', '清除旧楼层变量'].map(name => ({ name, visible: false }));
+            const item = {
+                type: 'script',
+                enabled: true,
+                name: 'MVU',
+                id: '961f366d-e403-45c2-8155-3d14ec86de53',
+                content: `import'${url}';`,
+                info: '',
+                button: { enabled: true, buttons },
+                data: {},
+                export_with: { data: true, button: true },
+            };
+            const out = await putScript(ctx, local, av, item);
+            return { ok: true, avatar: av, id: '961f366d-e403-45c2-8155-3d14ec86de53', content: item.content, created: out.created, scripts: out.scripts, note: '本体脚本只负责挂 runtime；变量结构仍需 mvu.schema 写一份' };
         },
     },
     {
@@ -523,10 +573,12 @@ export const TOOLS = [
             const upsertRx = (id, name, find, rep, opts) => {
                 let item = list.find(r => r.id === id);
                 if (!item) {
-                    item = { id, scriptName: name, findRegex: '', replaceString: '', placement: ['AI_OUTPUT'], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: true, substituteRegex: 2 };
+                    item = { id, scriptName: name, findRegex: '', replaceString: '', placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: true, substituteRegex: 2 };
                     list.push(item);
                 }
                 Object.assign(item, { scriptName: name, findRegex: find, replaceString: rep }, opts || {});
+                // placement 必须是数字数组，写字符串会被引擎判成不匹配（正则存在但完全不生效）
+                item.placement = toPlacement((opts && opts.placement) || [2]);
                 return item;
             };
             upsertRx('mvu-status-bar', '[美化]MVU状态栏', '/<StatusPlaceHolderImpl\\/>/g', html, { markdownOnly: true, promptOnly: false, disabled: false });
@@ -596,15 +648,24 @@ export const TOOLS = [
             } catch (e) {
                 warnings.push('读不到扩展正则设置：' + e.message);
             }
-            // 第 1 条：zod schema 脚本必须存脚本位
+            // 第 1 条：zod schema 脚本必须存脚本位；同时必须挂 MVU 本体（两份脚本才算齐）
             let schema = { exist: false, bare_import: false, registered: false, name: '' };
+            let runtime = { exist: false, name: '' };
             try {
                 const ctx = c();
                 const av = a.card || ctx.characterId;
                 const ch = (ctx.characters || []).find(x => x.avatar === av);
                 const ext = ((ch || {}).data || {}).extensions || {};
                 const scripts = (ext.tavern_helper || {}).scripts || [];
-                const s = (Array.isArray(scripts) ? scripts : []).find(x => {
+                const list = Array.isArray(scripts) ? scripts : [];
+                const rt = list.find(x => {
+                    if (!x) return false;
+                    if (x.id === '961f366d-e403-45c2-8155-3d14ec86de53') return true;
+                    const code = String(x.content || '');
+                    return code.indexOf('MagVarUpdate') >= 0 || code.indexOf('bundle.js') >= 0;
+                });
+                if (rt) runtime = { exist: true, name: String(rt.name || rt.id || '') };
+                const s = list.find(x => {
                     const code = String((x || {}).content || '');
                     return /registerMvuSchema|z\.object/.test(code);
                 });
@@ -616,6 +677,7 @@ export const TOOLS = [
                 } else {
                     issues.push('第1条 缺 zod 变量结构脚本（必须存角色卡脚本位，不是世界书条目；用 mvu.schema 写）');
                 }
+                if (!runtime.exist) issues.push('缺 MVU 本体脚本（id 961f366d-e403-45c2-8155-3d14ec86de53 / 内容含 bundle.js）：只有变量结构、没有本体时 MagVarUpdate 运行时没挂上，变量永远不动（用 mvu.runtime 写）');
             } catch (e) {
                 warnings.push('读不到角色卡脚本位：' + e.message);
             }
@@ -629,13 +691,51 @@ export const TOOLS = [
                 issues,
                 warnings,
                 schema,
+                runtime,
                 ok_all: okAll,
-                next: okAll ? '八条齐备，可开始写正文' : [
+                next: okAll ? '八条 + 两份脚本齐备，可开始写正文' : [
                     missing.length ? '缺条目：调 mvu.build 一次补齐（会强制纠正配置）' : '',
                     issues.some(x => /schema/.test(x)) ? 'schema 问题：调 mvu.schema 重写脚本位' : '',
+                    issues.some(x => /本体脚本/.test(x)) ? '缺 MVU 本体：调 mvu.runtime 写 bundle.js 那一份' : '',
                     regIssues ? '正则缺失：调 mvu.statusbar 建两条正则' : '',
                 ].filter(Boolean),
             };
+        },
+    },
+    {
+        name: 'script.upsert',
+        kind: 'write',
+        desc: '写/更新角色卡「酒馆助手」脚本位里的任意一份脚本（data.extensions.tavern_helper.scripts）。字段按 JS-Slash-Runner 的 Script 规范（type/enabled/name/id/content/info/button/data/export_with），按 id 优先、其次 name 判重，不会重复堆积。用于：挂 MVU 本体或第三方插件、写自定义事件监听/挂界面逻辑、把一段会执行的 JS 塞进卡里。注意脚本会在酒馆助手的 iframe 里执行，写之前先拿到可执行内容；纯文本设定请用世界书条目而不是脚本。',
+        params: {
+            card: 'string 头像文件名，默认当前角色',
+            name: 'string 脚本名（显示在脚本列表里）',
+            id: 'string 可选，唯一 id；不传则按 name 判重',
+            content: 'string 脚本 JS 源码（完整正文）',
+            enabled: 'boolean 可选，默认 true',
+            buttons: 'array 可选，脚本按钮 [{ "name": "按钮名", "visible": false }]',
+            data: 'object 可选，脚本自带数据',
+        },
+        run: async a => {
+            const ctx = c();
+            const av = a.card || ctx.characterId;
+            const local = (ctx.characters || []).find(x => x.avatar === av);
+            if (!local) throw new Error(`找不到角色卡「${av}」`);
+            if (!a.name) throw new Error('script.upsert 需要 name');
+            if (!String(a.content || '').trim()) throw new Error('script.upsert 需要 content');
+            const item = {
+                type: 'script',
+                enabled: a.enabled !== false,
+                name: String(a.name),
+                id: a.id || undefined,
+                content: String(a.content),
+                info: '',
+                button: { enabled: true, buttons: Array.isArray(a.buttons) ? a.buttons : [] },
+                data: a.data && typeof a.data === 'object' ? a.data : {},
+                export_with: { data: true, button: true },
+            };
+            if (!item.id) delete item.id;
+            const out = await putScript(ctx, local, av, item);
+            return { ok: true, avatar: av, name: item.name, id: out.id || null, created: out.created, scripts: out.scripts, enabled: item.enabled };
         },
     },
 ];

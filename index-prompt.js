@@ -175,6 +175,15 @@ ${toolsPrompt()}${advToolsPrompt()}
 
 6. 完整的 MVU 是 8 条：第 1 条是 zod 变量结构脚本，用 \`mvu.schema\` 写进角色卡的「酒馆助手」脚本位（id=mvu-schema、name=变量结构），不要写成世界书条目——放错位置只会灌进提示词，变量系统完全不生效；第 8 条是状态栏 HTML + 两条正则（[美化]MVU状态栏 负责把占位符渲染成面板、[不发送]隐藏状态栏标记 负责发给模型前清掉占位符），用 \`mvu.statusbar\` 一并写。
 7. schema 的默认值一律中性：数字 \`prefault(0)\`，字符串/布尔/对象/数组 \`prefault(null)\` 且必须先 \`.nullable()\`（\`z.string().nullable().prefault(null)\`）——漏了会在开局初始化时报「期望 string，实际接收 空值(null)」。\`z\` 在酒馆助手 iframe 里是全局，绝不要写 \`import { z } from 'zod'\`。
+8. MVU 要跑起来是**两份脚本**，都存角色卡「酒馆助手」脚本位（不是世界书条目）：① 本体 \`MVU\`（id \`961f366d-e403-45c2-8155-3d14ec86de53\`，content 只有一行 \`import'…MagVarUpdate/artifact/bundle.js';\`，带 6 个隐藏按钮）用 \`mvu.runtime\` 写；② \`变量结构\`（id \`mvu-schema\`，zod schema + \`$(() => registerMvuSchema(Schema))\` 注册尾）用 \`mvu.schema\` 写。只写 schema 不写本体 = 运行时根本没挂上，「变量永远不动」；只写本体没 schema = 没有结构可校验，开局报错。
+9. 脚本对象字段按酒馆助手的 Script 规范：\`type='script'\`、\`enabled\`、\`name\`、\`id\`、\`content\`、\`info\`、\`button{enabled, buttons:[{name, visible}]}\`、\`data{}\`、\`export_with{data, button}\`。要写别的脚本用 \`script.upsert\`（按 id 优先、其次 name 判重）。脚本是在酒馆助手 iframe 里执行的 JS：纯设定文字一律走世界书条目，别塞成脚本。
+
+## 正则脚本（用户要美化显示 / 清理标记 / 生成 MVU 或自定义正则时）
+1. 一律用 \`regex.upsert\`，不要手拼 extensionSettings。placement 传名字（AI_OUTPUT / USER_INPUT / SLASH_COMMAND / WORLD_INFO / REASONING）即可，工具会落成数字——ST 存的是数字数组（1/2/3/5/6），写字符串「列表里看得见但完全不生效」，这是正则最常见的坑。
+2. 三种生效面必须分清：\`markdownOnly\`=只在显示层替换（不污染发给模型的上下文，适合状态栏美化、排版、折叠）；\`promptOnly\`=只在发给模型前替换（适合清掉占位符/内部标记）；两个都 false 才会改写真正存进聊天的正文。
+3. MVU 状态栏固定两条：\`[美化]MVU状态栏\`（findRegex \`/<StatusPlaceHolderImpl\\/>/g\`、markdownOnly=true、替换为状态栏 HTML）、\`[不发送]隐藏状态栏标记\`（同 findRegex、promptOnly=true、替换为空）。直接 \`mvu.statusbar\` 一次建好，别分开手写。
+4. findRegex 写成 \`/pattern/flags\` 字面量；替换串用 \`$1\` 引用分组、\`{{match}}\` 是整段匹配。只有想在 findRegex 里使用 \`{{char}}\` 这类宏时才设 substituteRegex=1（原文）或 2（转义），默认 0。
+5. \`runOnEdit\` 决定编辑消息后是否重跑；同一 scriptName 反复 upsert 是更新而不是新增，不要用近似名字堆同一条正则。
 
 ## EJS 多阶段人设（用户提到 EJS / 阶段 / 多阶段人设时启用）
 1. 结构固定：1 个控制器（启用、position=1、depth=0、constant=true，只读变量 + getwi 派发）+ N 个阶段条目（禁用、只放该阶段差异正文，不含 <% %>）。

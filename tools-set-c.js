@@ -1,5 +1,22 @@
 import { c, api, apiGet, apiForm, bridge, pickCharacter, characterSummary, getSettingByPath, refreshCharacters } from './tools-lib.js';
 
+/**
+ * 正则 placement 必须是数字：ST 正则编辑器保存时把勾选框 parseInt 成数字数组，
+ * 引擎判定是 script.placement.includes(数字)。枚举见 public/scripts/extensions/regex/engine.js:
+ * MD_DISPLAY=0(已废弃)、USER_INPUT=1、AI_OUTPUT=2、SLASH_COMMAND=3、WORLD_INFO=5、REASONING=6。
+ * 这里允许传名字或数字，一律归一成数字；未知名字按 AI_OUTPUT 处理并保留原名，避免静默失效。
+ */
+const PLACEMENT_NUM = { MD_DISPLAY: 0, USER_INPUT: 1, AI_OUTPUT: 2, SLASH_COMMAND: 3, WORLD_INFO: 5, REASONING: 6, SENDAS: 2 };
+const toPlacement = v => {
+    const arr = Array.isArray(v) ? v : (v === undefined ? [2] : [v]);
+    return arr.map(x => {
+        if (typeof x === 'number' && Number.isFinite(x)) return x;
+        const k = String(x).trim().toUpperCase();
+        return Object.prototype.hasOwnProperty.call(PLACEMENT_NUM, k) ? PLACEMENT_NUM[k] : 2;
+    });
+};
+export { toPlacement };
+
 export const ST_TOOLS_C = [
     {
         name: 'setting.get',
@@ -105,30 +122,44 @@ export const ST_TOOLS_C = [
     {
         name: 'regex.upsert',
         kind: 'write',
-        desc: '按脚本名新增或更新正则脚本。',
+        desc: '按脚本名新增或更新酒馆原生正则脚本。placement 必须落成数字（ST 的 extensionSettings.regex 存的是数字数组：USER_INPUT=1、AI_OUTPUT=2、SLASH_COMMAND=3、WORLD_INFO=5、REASONING=6，正则编辑器保存时是 parseInt 过的；写字符串会被 script.placement.includes(数字) 判成不匹配，正则表面存在却完全不生效）。同时支持 markdownOnly（只在显示层替换，如状态栏美化）、promptOnly（只在发给模型前替换，如隐藏标记）两个开关。',
         params: {
             scriptName: 'string 脚本名',
-            findRegex: 'string 查找正则',
-            replaceString: 'string 替换内容',
-            placement: 'array 如 ["AI_OUTPUT","USER_INPUT"]',
-            disabled: 'boolean',
+            findRegex: 'string 查找正则，形如 /pattern/flags',
+            replaceString: 'string 替换内容（支持 $1 与 {{match}}）',
+            placement: 'array 字符串名或数字，如 ["AI_OUTPUT"] 或 [2]',
+            disabled: 'boolean 可选',
+            markdownOnly: 'boolean 可选，只在显示层生效（不改变发给模型的正文）',
+            promptOnly: 'boolean 可选，只在发送给模型前生效',
+            runOnEdit: 'boolean 可选，编辑消息时也执行',
+            substituteRegex: 'number 可选，findRegex 里宏替换方式：0=不替换 1=替换为原文 2=替换为转义文本',
         },
         run: async a => {
             const x = c();
+            x.extensionSettings = x.extensionSettings || {};
             const list = x.extensionSettings.regex || (x.extensionSettings.regex = []);
             let item = list.find(r => r.scriptName === a.scriptName);
             if (!item) {
-                item = { id: `st-agent-${Date.now()}`, scriptName: a.scriptName, findRegex: '', replaceString: '', placement: ['AI_OUTPUT'], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false, substituteRegex: 0 };
+                item = { id: `st-agent-${Date.now()}`, scriptName: a.scriptName, findRegex: '', replaceString: '', placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false, substituteRegex: 0 };
                 list.push(item);
             }
             Object.assign(item, {
                 findRegex: a.findRegex ?? item.findRegex,
                 replaceString: a.replaceString ?? item.replaceString,
-                placement: a.placement ?? item.placement,
+                placement: a.placement === undefined ? item.placement : toPlacement(a.placement),
                 disabled: a.disabled ?? item.disabled,
             });
-            x.saveSettingsDebounced();
-            return { ok: true, scriptName: a.scriptName };
+            if (a.markdownOnly !== undefined) item.markdownOnly = !!a.markdownOnly;
+            if (a.promptOnly !== undefined) item.promptOnly = !!a.promptOnly;
+            if (a.runOnEdit !== undefined) item.runOnEdit = !!a.runOnEdit;
+            if (a.substituteRegex !== undefined) item.substituteRegex = Number(a.substituteRegex);
+            x.saveSettingsDebounced?.();
+            return {
+                ok: true,
+                scriptName: a.scriptName,
+                placement: item.placement,
+                flags: { markdownOnly: !!item.markdownOnly, promptOnly: !!item.promptOnly, runOnEdit: !!item.runOnEdit },
+            };
         },
     },
     {
