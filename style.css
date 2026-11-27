@@ -334,6 +334,192 @@
 
 .sta-hint { margin-top: 10px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.06); font-size: 11px; color: var(--sta-muted); }
 
+/* ---------- v1.10：风险徽标 / 计划卡 / 思考行 / 流式光标 ---------- */
+
+.sta-risk-badge {
+    display: inline-flex;
+    align-items: center;
+    height: 16px;
+    padding: 0 6px;
+    border-radius: 5px;
+    border: 1px solid currentColor;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    line-height: 1;
+    opacity: 0.9;
+    flex: 0 0 auto;
+}
+
+.sta-risk-1 { color: var(--sta-ok); }
+.sta-risk-2 { color: var(--sta-gold); }
+.sta-risk-3 { color: var(--sta-fail); }
+
+/* 计划卡 */
+.sta-plan-card {
+    border: 1px solid var(--sta-line);
+    border-radius: 14px;
+    padding: 12px 14px;
+    margin: 10px 0;
+    background: linear-gradient(158deg, rgba(216, 178, 106, 0.09), rgba(15, 18, 24, 0.55) 42%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    animation: sta-rise 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.sta-plan-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.sta-plan-icon { color: var(--sta-gold); font-size: 12px; }
+.sta-plan-title { font-size: 11px; letter-spacing: 0.14em; color: var(--sta-gold-2); text-transform: uppercase; }
+.sta-plan-body { font-size: 12.5px; line-height: 1.6; color: var(--sta-text); white-space: pre-wrap; }
+.sta-plan-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+
+.sta-plan-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 9px;
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.035);
+    font-size: 12px;
+}
+
+.sta-plan-idx { color: var(--sta-muted); font-size: 11px; flex: 0 0 auto; }
+.sta-plan-tool { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--sta-gold-2); flex: 0 0 auto; }
+.sta-plan-target { color: var(--sta-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 批处理明细：缩进 + 更淡，一眼看出"这里面有几条" */
+.sta-plan-sub {
+    margin-left: 18px;
+    padding: 4px 8px;
+    background: rgba(255, 255, 255, 0.018);
+    opacity: 0.86;
+}
+.sta-plan-sub .sta-plan-idx { color: rgba(216, 178, 106, 0.55); }
+.sta-plan-sub .sta-plan-tool { font-weight: 400; }
+
+.sta-plan-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.sta-plan-approved { border-color: rgba(127, 209, 168, 0.4); }
+.sta-plan-rejected { opacity: 0.68; }
+
+/* 思考行 */
+.sta-reasoning {
+    margin: 2px 0 8px;
+    padding-left: 9px;
+    border-left: 2px solid rgba(216, 178, 106, 0.32);
+}
+.sta-reasoning summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    list-style: none;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--sta-muted);
+    outline: none;
+}
+.sta-reasoning summary::-webkit-details-marker { display: none; }
+
+.sta-reasoning-glow {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background: var(--sta-gold);
+    animation: sta-pulse 1.4s ease-in-out infinite;
+}
+.sta-reasoning-done .sta-reasoning-glow { animation: none; background: var(--sta-ok); }
+
+.sta-reasoning-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* 生成中的摘要做鎏金扫光 */
+.sta-reasoning:not(.sta-reasoning-done) .sta-reasoning-title {
+    background: linear-gradient(90deg, var(--sta-muted) 0%, var(--sta-gold-2) 45%, var(--sta-muted) 90%);
+    background-size: 220% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: sta-shine 2.2s linear infinite;
+}
+
+.sta-reasoning-body {
+    margin-top: 6px;
+    max-height: 168px;
+    overflow: auto;
+    font-size: 12px;
+    line-height: 1.62;
+    color: var(--sta-muted);
+    white-space: pre-wrap;
+}
+
+.sta-reasoning-item { margin: 4px 0; }
+
+/* 流式光标 */
+.sta-caret {
+    display: inline-block;
+    width: 2px;
+    height: 1em;
+    margin-left: 2px;
+    vertical-align: -2px;
+    background: var(--sta-gold);
+    animation: sta-blink 1s steps(2, start) infinite;
+}
+
+.sta-stream-tag {
+    margin-left: 8px;
+    padding: 1px 5px;
+    border: 1px solid var(--sta-line);
+    border-radius: 4px;
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    color: var(--sta-gold);
+    text-transform: uppercase;
+}
+
+/* 批次确认 */
+.sta-approval-batch .sta-approval-text {
+    max-height: 44vh;
+    overflow: auto;
+    white-space: normal;
+}
+.sta-approval-title { font-size: 12px; color: var(--sta-gold-2); margin-bottom: 8px; }
+.sta-approval-list { display: flex; flex-direction: column; gap: 6px; }
+.sta-approval-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 9px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.035);
+    font-size: 12px;
+}
+.sta-approval-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--sta-gold-2); flex: 0 0 auto; }
+.sta-approval-target { color: var(--sta-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@keyframes sta-rise {
+    from { opacity: 0; transform: translateY(7px); }
+    to { opacity: 1; transform: none; }
+}
+@keyframes sta-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(216, 178, 106, 0.55); }
+    50% { box-shadow: 0 0 0 5px rgba(216, 178, 106, 0); }
+}
+@keyframes sta-shine {
+    from { background-position: 0% 50%; }
+    to { background-position: 200% 50%; }
+}
+@keyframes sta-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
 /* 扩展菜单入口（移动端从魔杖菜单打开） */
 .sta-menu-item { cursor: pointer; }
 .sta-menu-item .extensionsMenuExtensionButton { color: var(--sta-gold); margin-right: 8px; }
