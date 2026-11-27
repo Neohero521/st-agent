@@ -83,7 +83,7 @@ export function briefArgs(name, args) {
         return `${n} 条操作`;
     }
     if (a.name && a.comment) return `${a.name} / ${a.comment}`;
-    if (a.name && a.newName) return `${a.name} -> ${a.newName}`;
+    if (a.name && a.newName) return `${a.name} → ${a.newName}`;
     if (a.path) return String(a.path);
     if (a.scriptName) return String(a.scriptName);
     if (a.name) return String(a.name);
