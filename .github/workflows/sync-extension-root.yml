@@ -14,15 +14,15 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message || '', '[sync]')
     steps:
       - uses: actions/checkout@v4
-      - name: Apply v1.18.0 package to extension root
+      - name: Apply v1.19.0 package to extension root
         run: |
           set -e
-          curl -fL --retry 3 --retry-delay 2 -o /tmp/pkg.zip "https://aka.doubaocdn.com/s/wxVX6klx8U"
+          curl -fL --retry 3 --retry-delay 2 -o /tmp/pkg.zip "https://aka.doubaocdn.com/s/dKKPxNnAGd"
           ls -l /tmp/pkg.zip
           rm -rf /tmp/pkg && mkdir -p /tmp/pkg && unzip -o -q /tmp/pkg.zip -d /tmp/pkg
           cp -fR /tmp/pkg/st-agent/. .
           git config user.name 'st-agent-bot'
           git config user.email 'bot@users.noreply.github.com'
           git add -A
-          git commit -m 'feat: 模型摘要检查点 + repeat-tool-reminder + timeout-policy + todo.write + goal 家族, sync root to v1.18.0 [sync]' || echo 'nothing to commit'
+          git commit -m 'feat: CJK 修正的 token 计量 + token 阈值 + time-context + 常驻指令 + session.peek + 控制面索引, sync root to v1.19.0 [sync]' || echo 'nothing to commit'
           git push origin HEAD:main
