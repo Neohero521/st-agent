@@ -12,6 +12,7 @@
 import { loadBook, setEntry, getEntries, entryFields } from './adv-lib-world.js';
 import { c } from './adv-lib-core.js';
 import { toPlacement } from './tools-set-c.js';
+import { charBy, scopedScripts, upsertScoped, allRegexes, scopedAllowed } from './adv-lib-regex.js';
 import { listSpill, readSpill, setTodos, listSessionsBrief, snapshotSession, usageOf } from './index-sessions.js';
 import { getGoal, changeGoal } from './index-goal.js';
 
@@ -556,11 +557,12 @@ export const TOOLS = [
     {
         name: 'mvu.statusbar',
         kind: 'write',
-        desc: '写 MVU 状态栏这一套：世界书「状态栏」条目（position=2、depth=2、order=35，内容为完整 HTML，读 stat_data 用 getvar）+ 两条正则——[美化]MVU状态栏（把 <StatusPlaceHolderImpl/> 换成这段 HTML，只影响显示）+ [不发送]隐藏状态栏标记（发给模型前把占位符清掉，免得它照着占位符编造）。',
+        desc: '写 MVU 状态栏这一套：世界书「状态栏」条目（position=2、depth=2、order=35，内容为完整 HTML，读 stat_data 用 getvar）+ 两条正则——[美化]MVU状态栏（把 <StatusPlaceHolderImpl/> 换成这段 HTML，只影响显示）+ [不发送]隐藏状态栏标记（发给模型前把占位符清掉，免得它照着占位符编造）。两条正则写在角色卡的正则位（scoped），只对这张卡生效，并自动打开卡的正则开关；这张卡换到别的剧本也不会把状态栏糊到别人身上。',
         params: {
             book: 'string 世界书名',
             html: 'string 状态栏 HTML（必须含 <StatusPlaceHolderImpl/> 占位符）',
             enable_hide: 'boolean 可选，默认 true，创建「不发送」正则',
+            card: 'string 可选，头像文件名（正则写到哪张卡，留空用当前角色）',
         },
         run: async a => {
             if (!a.book) throw new Error('mvu.statusbar 需要 book');
@@ -569,26 +571,44 @@ export const TOOLS = [
             if (!/StatusPlaceHolderImpl/.test(html)) throw new Error('状态栏 HTML 里必须保留 <StatusPlaceHolderImpl/> 占位符');
             const spec = { position: 2, depth: 2, order: 35, constant: false, enabled: true };
             const written = await writeEntry(a.book, '状态栏', html, spec);
-            const ctx = c();
-            ctx.extensionSettings = ctx.extensionSettings || {};
-            const list = ctx.extensionSettings.regex || (ctx.extensionSettings.regex = []);
-            const upsertRx = (id, name, find, rep, opts) => {
-                let item = list.find(r => r.id === id);
-                if (!item) {
-                    item = { id, scriptName: name, findRegex: '', replaceString: '', placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: true, substituteRegex: 2 };
-                    list.push(item);
-                }
-                Object.assign(item, { scriptName: name, findRegex: find, replaceString: rep }, opts || {});
-                // placement 必须是数字数组，写字符串会被引擎判成不匹配（正则存在但完全不生效）
-                item.placement = toPlacement((opts && opts.placement) || [2]);
-                return item;
+
+            // 正则写角色卡（scoped）：MVU 状态栏只属于这张卡，写全局会把别卡的占位符也一起换掉
+            const ch = charBy(a.card);
+            if (!ch) throw new Error('MVU 状态栏正则必须挂在角色卡上，但当前没有角色卡（群聊/未开卡）：先打开目标角色或传 card=头像文件名');
+            const hide = a.enable_hide !== false;
+            const upsertRx = (id, name, rep, opts) => upsertScoped(ch, Object.assign({
+                id,
+                scriptName: name,
+                findRegex: '/<StatusPlaceHolderImpl\\/>/g',
+                replaceString: rep,
+                placement: toPlacement([2]),
+                disabled: false,
+                runOnEdit: true,
+                substituteRegex: 2,
+                markdownOnly: false,
+                promptOnly: false,
+            }, opts || {}));
+            const bar = await upsertRx('mvu-status-bar', '[美化]MVU状态栏', html, { markdownOnly: true, promptOnly: false });
+            const hidden = hide ? await upsertRx('mvu-status-hide', '[不发送]隐藏状态栏标记', '', { markdownOnly: false, promptOnly: true }) : null;
+
+            // 回读核对：两条必须真的在这张卡的 regex_scripts 里，且开关是开的
+            const after = scopedScripts(charBy(a.card));
+            const problems = [];
+            if (!after.some(r => r && r.id === 'mvu-status-bar')) problems.push('[美化]MVU状态栏 没写进卡的正则位');
+            if (hide && !after.some(r => r && r.id === 'mvu-status-hide')) problems.push('[不发送]隐藏状态栏标记 没写进卡的正则位');
+            if (!scopedAllowed(charBy(a.card))) problems.push('这张卡的正则开关没打开（character_allowed_regex），正则不会生效');
+
+            return {
+                ok: problems.length === 0,
+                book: a.book,
+                entry_uid: written.uid,
+                regex_scope: 'scoped',
+                character: ch.avatar,
+                regex: hide ? '[美化]MVU状态栏 + [不发送]隐藏状态栏标记' : '[美化]MVU状态栏',
+                regex_total_in_card: after.length,
+                problems,
+                bytes: html.length,
             };
-            upsertRx('mvu-status-bar', '[美化]MVU状态栏', '/<StatusPlaceHolderImpl\\/>/g', html, { markdownOnly: true, promptOnly: false, disabled: false });
-            if (a.enable_hide !== false) {
-                upsertRx('mvu-status-hide', '[不发送]隐藏状态栏标记', '/<StatusPlaceHolderImpl\\/>/g', '', { markdownOnly: false, promptOnly: true, disabled: false });
-            }
-            ctx.saveSettingsDebounced?.();
-            return { ok: true, book: a.book, entry_uid: written.uid, regex: a.enable_hide !== false ? '[美化]MVU状态栏 + [不发送]隐藏状态栏标记' : '[美化]MVU状态栏', bytes: html.length };
         },
     },
     {
@@ -641,12 +661,19 @@ export const TOOLS = [
             // 第 8 条：状态栏显示 / 隐藏两条正则
             let regIssues = 0;
             try {
-                const ctx = c();
-                const rx = (ctx.extensionSettings && ctx.extensionSettings.regex) || [];
+                // 两张表一起查：卡级（scoped）优先，全局也算（历史遗留的写全局版本仍能跑）
+                const ch = charBy(a.card);
+                const rx = allRegexes(ch);
                 const show = rx.filter(r => /StatusPlaceHolder/.test(String(r.findRegex || '')) && r.markdownOnly === true && r.promptOnly !== true);
                 const hide = rx.filter(r => /StatusPlaceHolder/.test(String(r.findRegex || '')) && r.promptOnly === true);
                 if (!show.length) { issues.push('第8条 缺「[美化]MVU状态栏」正则（markdownOnly=true）：占位符不会被替换成状态栏 HTML'); regIssues++; }
                 if (!hide.length) { warnings.push('缺「[不发送]隐藏状态栏标记」正则（promptOnly=true）：占位符会被发给模型，诱导它抄占位符'); }
+                // 写在卡里但开关没开 = 等于没写，这是最隐蔽的一种"做了但没生效"
+                const scopedShow = show.filter(r => r.scope === 'scoped');
+                if (scopedShow.length && !scopedAllowed(ch)) {
+                    issues.push('状态栏正则写在这张卡里，但这张卡的正则开关没打开（character_allowed_regex 里没有它的 avatar）：正则一条都不会跑。用 regex.upsert 重写一次会自动开闸，或让用户在「正则」页签手动打开。');
+                    regIssues++;
+                }
             } catch (e) {
                 warnings.push('读不到扩展正则设置：' + e.message);
             }

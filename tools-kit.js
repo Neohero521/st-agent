@@ -162,20 +162,20 @@ async function buildOps(spec) {
 
     for (const r of spec.regexes || []) {
         if (!r || !r.scriptName) { notes.push('跳过一条没有 scriptName 的正则'); continue; }
-        ops.push({
-            tool: 'regex.upsert',
-            args: {
-                scriptName: String(r.scriptName),
-                findRegex: r.findRegex,
-                replaceString: r.replaceString ?? '',
-                placement: r.placement,
-                disabled: r.disabled,
-                markdownOnly: r.markdownOnly,
-                promptOnly: r.promptOnly,
-                runOnEdit: r.runOnEdit,
-            },
-            why: r.why || '正则',
-        });
+        // 成套写卡的正则必须落在目标卡的正则位：写全局会把这张卡的美化糊到所有卡上
+        const rxArgs = {
+            scriptName: String(r.scriptName),
+            findRegex: r.findRegex,
+            replaceString: r.replaceString ?? '',
+            placement: r.placement,
+            disabled: r.disabled,
+            markdownOnly: r.markdownOnly,
+            promptOnly: r.promptOnly,
+            runOnEdit: r.runOnEdit,
+            scope: r.scope === 'global' ? 'global' : 'card',
+        };
+        if (avatar) rxArgs.card = avatar;
+        ops.push({ tool: 'regex.upsert', args: rxArgs, why: r.why || '正则' });
     }
 
     if (ops.length > OPS_LIMIT) throw new Error(`本套 ${ops.length} 条超过单批上限 ${OPS_LIMIT}，请拆成两批（例如先条目、再脚本+正则）`);
@@ -223,11 +223,15 @@ async function verify(spec) {
     }
 
     if (spec.regexes?.length) {
-        const list = c()?.extensionSettings?.regex ?? [];
+        // 回读要与写入同源：卡级读 data.extensions.regex_scripts（全局只是兜底，兼容旧数据）
+        const scoped = Array.isArray(card?.data?.extensions?.regex_scripts) ? card.data.extensions.regex_scripts : [];
+        const global = c()?.extensionSettings?.regex ?? [];
         for (const r of spec.regexes) {
-            const hit = list.find(x => x.scriptName === String(r.scriptName));
-            out.regexes.push({ scriptName: r.scriptName, ok: !!hit, placement: hit?.placement });
-            if (!hit) out.problems.push(`正则没写进去：${r.scriptName}`);
+            const wantGlobal = r.scope === 'global';
+            const hit = (wantGlobal ? global : scoped).find(x => x.scriptName === String(r.scriptName))
+                || (wantGlobal ? null : global.find(x => x.scriptName === String(r.scriptName)));
+            out.regexes.push({ scriptName: r.scriptName, ok: !!hit, placement: hit?.placement, scope: wantGlobal ? 'global' : 'scoped' });
+            if (!hit) out.problems.push(`正则没写进去：${r.scriptName}（${wantGlobal ? '全局' : '卡内'}）`);
         }
     }
 
@@ -247,7 +251,7 @@ export const TOOLS = [
             fields: 'object 要写的卡字段（description/personality/scenario/first_mes/mes_example/creator_notes…）',
             book: 'object {name, create?, bind?, additional?, entries:[{comment, content, position?, depth?, order?, constant?, enabled?}]}',
             scripts: 'array [{name, id?, content, info?, enabled?, button?, export_with?, data?}]',
-            regexes: 'array [{scriptName, findRegex, replaceString?, placement?, disabled?, markdownOnly?, promptOnly?}]',
+            regexes: 'array [{scriptName, findRegex, replaceString?, placement?, disabled?, markdownOnly?, promptOnly?, scope?}]（scope 默认 card：写目标卡的正则位，只对这张卡生效；要全剧通用才传 global）',
             commit: 'boolean 默认 false（只预演）；true 才真正写盘',
         },
         run: async a => {

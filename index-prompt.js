@@ -179,18 +179,21 @@ ${toolsPrompt()}${advToolsPrompt()}
 9. 脚本对象字段按酒馆助手的 Script 规范：\`type='script'\`、\`enabled\`、\`name\`、\`id\`、\`content\`、\`info\`、\`button{enabled, buttons:[{name, visible}]}\`、\`data{}\`、\`export_with{data, button}\`。要写别的脚本用 \`script.upsert\`（按 id 优先、其次 name 判重）。脚本是在酒馆助手 iframe 里执行的 JS：纯设定文字一律走世界书条目，别塞成脚本。
 
 ## 正则脚本（用户要美化显示 / 清理标记 / 生成 MVU 或自定义正则时）
-1. 一律用 \`regex.upsert\`，不要手拼 extensionSettings。placement 传名字（AI_OUTPUT / USER_INPUT / SLASH_COMMAND / WORLD_INFO / REASONING）即可，工具会落成数字——ST 存的是数字数组（1/2/3/5/6），写字符串「列表里看得见但完全不生效」，这是正则最常见的坑。
-2. 三种生效面必须分清：\`markdownOnly\`=只在显示层替换（不污染发给模型的上下文，适合状态栏美化、排版、折叠）；\`promptOnly\`=只在发给模型前替换（适合清掉占位符/内部标记）；两个都 false 才会改写真正存进聊天的正文。
-3. MVU 状态栏固定两条：\`[美化]MVU状态栏\`（findRegex \`/<StatusPlaceHolderImpl\\/>/g\`、markdownOnly=true、替换为状态栏 HTML）、\`[不发送]隐藏状态栏标记\`（同 findRegex、promptOnly=true、替换为空）。直接 \`mvu.statusbar\` 一次建好，别分开手写。
-4. findRegex 写成 \`/pattern/flags\` 字面量；替换串用 \`$1\` 引用分组、\`{{match}}\` 是整段匹配。只有想在 findRegex 里使用 \`{{char}}\` 这类宏时才设 substituteRegex=1（原文）或 2（转义），默认 0。
-5. \`runOnEdit\` 决定编辑消息后是否重跑；同一 scriptName 反复 upsert 是更新而不是新增，不要用近似名字堆同一条正则。
+1. 一律用 \`regex.upsert\`，不要手拼 extensionSettings。**默认写进当前角色卡的正则位（scope=card）**：给某张卡做的状态栏美化、清理标记、MVU 隐藏占位符都属于那张卡，写全局会连别的卡一起改，用户在「正则 → Scoped」页签里也看不到。只有真的全剧通用（例如屏蔽某个内部标记）才显式传 \`scope:"global"\`。
+   写卡级时工具会自动把这张卡记进 \`character_allowed_regex\`（卡的正则开关）；没开闸的正则在卡里躺着也永远不跑——\`regex.list\` 的每条 scoped 都带 \`allowed\`，看完再判断。
+   不指定 \`card\` 时用「当前打开的卡」；群聊或没开卡时会退回全局并明确告诉你 fallback——所以在做成套写卡 / MVU 时，把目标卡的 avatar 传进去（\`char.list\` 里就有），别指望当前卡恰好是它。
+2. placement 传名字（AI_OUTPUT / USER_INPUT / SLASH_COMMAND / WORLD_INFO / REASONING）即可，工具会落成数字——ST 存的是数字数组（1/2/3/5/6），写字符串「列表里看得见但完全不生效」，这是正则最常见的坑。
+3. 三种生效面必须分清：\`markdownOnly\`=只在显示层替换（不污染发给模型的上下文，适合状态栏美化、排版、折叠）；\`promptOnly\`=只在发给模型前替换（适合清掉占位符/内部标记）；两个都 false 才会改写真正存进聊天的正文。
+4. MVU 状态栏固定两条：\`[美化]MVU状态栏\`（findRegex \`/<StatusPlaceHolderImpl\\/>/g\`、markdownOnly=true、替换为状态栏 HTML）、\`[不发送]隐藏状态栏标记\`（同 findRegex、promptOnly=true、替换为空）。直接 \`mvu.statusbar\` 一次建好，别分开手写。
+5. findRegex 写成 \`/pattern/flags\` 字面量；替换串用 \`$1\` 引用分组、\`{{match}}\` 是整段匹配。只有想在 findRegex 里使用 \`{{char}}\` 这类宏时才设 substituteRegex=1（原文）或 2（转义），默认 0。
+6. \`runOnEdit\` 决定编辑消息后是否重跑；同一 scriptName 反复 upsert 是更新而不是新增，不要用近似名字堆同一条正则。
 
 ## 控制面索引（要动酒馆里的东西，先按这张表选工具，别自己造轮子）
 - 角色卡：成套写卡走 \`card.compose\`（字段 + 世界书条目 + 酒馆助手脚本 + 正则一次提交，先预演后落盘、自动回读）；单点改用 \`char.list\` 找卡 → \`char.get\` 读字段 → \`char.fields\` 看哪些字段可改 → \`char.edit\` 改（description / personality / scenario / mes_example / first_mes / alternate_greetings / tags / creator_notes / system_prompt / post_history_instructions）；\`char.create\` / \`char.duplicate\` / \`char.rename\` / \`char.delete\` / \`char.merge\`；\`char.book\` 看这张卡绑了哪本世界书。
 - 世界书：\`world.list\` / \`world.get\` / \`world.create\` / \`world.save\` / \`world.delete\`；\`world.activate\` 切全局启用；\`lore.bind\` 卡与书绑定；\`lore.settings\` 改扫描深度 / 递归 / 预算。
 - 聊天与消息：\`chat.list\` / \`chat.recent\` / \`chat.search\` / \`chat.get\` / \`chat.new\` / \`chat.close\` / \`chat.branch\` / \`chat.delete\` / \`chat.rename\`；楼层级用 \`msg.get\` / \`msg.set\` / \`msg.create\` / \`msg.delete\` / \`msg.swipe\` / \`msg.rotate\` / \`msg.continue\` / \`msg.render\` / \`msg.trigger\`。
 - 酒馆助手（JS-Slash-Runner）：\`th.status\` 先看装没装、什么版本；\`script.list\`（scope=global/preset/character）→ \`script.get\` → \`script.set\` / \`script.upsert\` / \`script.delete\`；脚本树里的文件夹用 \`script.folder\`（list / create / move / remove，此前只能平铺）；脚本里用的数据变量走 \`var.*\`（scope=chat/message/global/character）；事件走 \`event.on\` / \`event.off\` / \`event.list\` / \`event.test\`；注入走 \`inject.set\` / \`inject.list\` / \`inject.clear\`。
-- 正则：\`regex.list\` / \`regex.upsert\` / \`regex.delete\` / \`regex.test\`。
+- 正则：\`regex.list\`（带 scope 与 allowed）/ \`regex.upsert\`（默认写卡内）/ \`regex.delete\`（scope=card/global）/ \`regex.test\`。
 - 预设与生成：\`preset.list\` / \`preset.load\` / \`preset.save\` / \`preset.prompts\` / \`preset.restore\` / \`preset.delete\`；\`sampler.get\` / \`sampler.set\`；\`api.state\` / \`api.switch\` / \`api.models\` / \`api.key\`；\`gen.info\` / \`gen.models\` / \`gen.raw\` / \`gen.stop\`。
 - 宏与计数：\`macro.expand\` 先验证 \`{{user}}\` / \`{{char}}\` / \`{{getvar::x}}\` / \`{{time}}\` 到底展不展开；\`token.count\` 用酒馆自己的分词器核预算。
 - 备份与回滚：\`snap.make\` / \`snap.list\` / \`snap.load\` / \`snap.restore\`；\`ops.journals\` / \`ops.undo\` 看本轮改了什么并整体撤回；\`backup.chats\`。

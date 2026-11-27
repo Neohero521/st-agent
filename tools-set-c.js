@@ -1,4 +1,5 @@
 import { c, api, apiGet, apiForm, bridge, pickCharacter, characterSummary, getSettingByPath, refreshCharacters } from './tools-lib.js';
+import { charBy, scopedScripts, upsertScoped, allRegexes, scopedAllowed } from './adv-lib-regex.js';
 
 /**
  * 正则 placement 必须是数字：ST 正则编辑器保存时把勾选框 parseInt 成数字数组，
@@ -109,25 +110,37 @@ export const ST_TOOLS_C = [
     {
         name: 'regex.list',
         kind: 'read',
-        desc: '列出全部正则脚本。',
-        params: {},
-        run: async () => (c().extensionSettings?.regex || []).map(r => ({
-            scriptName: r.scriptName,
-            findRegex: r.findRegex,
-            replaceString: r.replaceString,
-            placement: r.placement,
-            disabled: r.disabled,
-        })),
+        desc: '列出正则脚本，分两处：global（extension_settings.regex，全剧通用）与 scoped（当前角色卡的 data.extensions.regex_scripts，只跟着这张卡）。返回里每条都带 scope；scoped 还带 character 与 allowed（allowed=false 表示这张卡的正则开关没打开，一条都不会生效）。',
+        params: { card: 'string 可选，头像文件名，留空用当前角色' },
+        run: async a => {
+            const ch = charBy(a.card);
+            return allRegexes(ch).map(r => ({
+                scope: r.scope,
+                character: r.character || undefined,
+                allowed: r.scope === 'scoped' ? scopedAllowed(ch) : undefined,
+                scriptName: r.scriptName,
+                findRegex: r.findRegex,
+                replaceString: String(r.replaceString || '').slice(0, 200),
+                placement: r.placement,
+                disabled: r.disabled,
+                markdownOnly: r.markdownOnly,
+                promptOnly: r.promptOnly,
+            }));
+        },
     },
     {
         name: 'regex.upsert',
         kind: 'write',
-        desc: '按脚本名新增或更新酒馆原生正则脚本。placement 必须落成数字（ST 的 extensionSettings.regex 存的是数字数组：USER_INPUT=1、AI_OUTPUT=2、SLASH_COMMAND=3、WORLD_INFO=5、REASONING=6，正则编辑器保存时是 parseInt 过的；写字符串会被 script.placement.includes(数字) 判成不匹配，正则表面存在却完全不生效）。同时支持 markdownOnly（只在显示层替换，如状态栏美化）、promptOnly（只在发给模型前替换，如隐藏标记）两个开关。',
+        desc: '按脚本名新增或更新一条正则。**默认写进当前角色卡的正则位（scoped），不是全局**——给某张卡做的状态栏美化、清理标记、MVU 隐藏占位符都必须挂在这张卡上，写到全局会连别的卡一起改。要写全剧通用正则时显式传 scope:"global"。'
+            + 'placement 必须落成数字（USER_INPUT=1、AI_OUTPUT=2、SLASH_COMMAND=3、WORLD_INFO=5、REASONING=6；写字符串会被 script.placement.includes(数字) 判成不匹配，正则表面存在却完全不生效）。'
+            + 'markdownOnly=只在显示层替换（状态栏美化）、promptOnly=只在发给模型前替换（隐藏标记）。写卡级时会自动打开这张卡的正则开关（character_allowed_regex），不开闸的正则在卡里躺着也永远不跑。',
         params: {
             scriptName: 'string 脚本名',
             findRegex: 'string 查找正则，形如 /pattern/flags',
             replaceString: 'string 替换内容（支持 $1 与 {{match}}）',
             placement: 'array 字符串名或数字，如 ["AI_OUTPUT"] 或 [2]',
+            scope: 'string 可选：card（默认，写当前角色卡）或 global（全剧通用）',
+            card: 'string 可选，头像文件名，scope=card 时指定写哪张卡，留空用当前角色',
             disabled: 'boolean 可选',
             markdownOnly: 'boolean 可选，只在显示层生效（不改变发给模型的正文）',
             promptOnly: 'boolean 可选，只在发送给模型前生效',
@@ -135,10 +148,68 @@ export const ST_TOOLS_C = [
             substituteRegex: 'number 可选，findRegex 里宏替换方式：0=不替换 1=替换为原文 2=替换为转义文本',
         },
         run: async a => {
+            if (!a.scriptName) throw new Error('需要 scriptName');
+            if (!a.findRegex) throw new Error('需要 findRegex（形如 /pattern/flags）');
+            const flags = {};
+            if (a.markdownOnly !== undefined) flags.markdownOnly = !!a.markdownOnly;
+            if (a.promptOnly !== undefined) flags.promptOnly = !!a.promptOnly;
+            if (a.runOnEdit !== undefined) flags.runOnEdit = !!a.runOnEdit;
+            if (a.substituteRegex !== undefined) flags.substituteRegex = Number(a.substituteRegex);
+            if (a.disabled !== undefined) flags.disabled = !!a.disabled;
+
+            const wantGlobal = String(a.scope || '').toLowerCase() === 'global';
+            if (!wantGlobal) {
+                const ch = charBy(a.card);
+                if (!ch) {
+                    // 群聊 / 欢迎页没有当前卡：这时写卡级无处可挂，退回全局并明确告知，不静默改作用域
+                    const x = c();
+                    x.extensionSettings = x.extensionSettings || {};
+                    const list = x.extensionSettings.regex || (x.extensionSettings.regex = []);
+                    let item = list.find(r => r.scriptName === a.scriptName);
+                    const created = !item;
+                    if (!item) {
+                        item = { id: `st-agent-${Date.now()}`, scriptName: a.scriptName };
+                        list.push(item);
+                    }
+                    Object.assign(item, {
+                        findRegex: a.findRegex,
+                        replaceString: a.replaceString ?? '',
+                        placement: toPlacement(a.placement),
+                        disabled: false,
+                        markdownOnly: false,
+                        promptOnly: false,
+                        runOnEdit: false,
+                        substituteRegex: 0,
+                    }, flags);
+                    x.saveSettingsDebounced?.();
+                    return { ok: true, scope: 'global', fallback: '没有当前角色卡（群聊/未开卡），已写全局', created, scriptName: a.scriptName, placement: item.placement, flags: { markdownOnly: !!item.markdownOnly, promptOnly: !!item.promptOnly, runOnEdit: !!item.runOnEdit } };
+                }
+                const got = await upsertScoped(ch, {
+                    scriptName: a.scriptName,
+                    findRegex: a.findRegex,
+                    replaceString: a.replaceString ?? '',
+                    placement: toPlacement(a.placement),
+                    ...flags,
+                });
+                return {
+                    ok: true,
+                    scope: 'scoped',
+                    character: got.avatar,
+                    created: got.created,
+                    allow_open: got.opened,
+                    scriptName: a.scriptName,
+                    placement: got.item.placement,
+                    total_in_card: got.total,
+                    flags: { markdownOnly: !!got.item.markdownOnly, promptOnly: !!got.item.promptOnly, runOnEdit: !!got.item.runOnEdit },
+                    note: '已写进角色卡正则位（正则 → Scoped 页签），只对这张卡生效；开关已自动打开。',
+                };
+            }
+
             const x = c();
             x.extensionSettings = x.extensionSettings || {};
             const list = x.extensionSettings.regex || (x.extensionSettings.regex = []);
             let item = list.find(r => r.scriptName === a.scriptName);
+            const created = !item;
             if (!item) {
                 item = { id: `st-agent-${Date.now()}`, scriptName: a.scriptName, findRegex: '', replaceString: '', placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: false, substituteRegex: 0 };
                 list.push(item);
@@ -156,9 +227,12 @@ export const ST_TOOLS_C = [
             x.saveSettingsDebounced?.();
             return {
                 ok: true,
+                scope: 'global',
+                created,
                 scriptName: a.scriptName,
                 placement: item.placement,
                 flags: { markdownOnly: !!item.markdownOnly, promptOnly: !!item.promptOnly, runOnEdit: !!item.runOnEdit },
+                note: '已写全局正则（extension_settings.regex）：对所有角色生效。',
             };
         },
     },

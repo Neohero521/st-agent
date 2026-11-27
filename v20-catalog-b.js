@@ -23,9 +23,18 @@ reg('regex.upsert', 2, 'none',
     async a => {
         if (!a.scriptName) return { error: '缺少 scriptName' };
         if (a.findRegex === undefined) return { error: '缺少 findRegex' };
-        const list = c().extensionSettings?.regex ?? [];
+        // 预演必须与真实写入同源：scope=card 查卡的正则位，scope=global（或不指定且无卡）查全局
+        const ctx = c();
+        const wantGlobal = String(a.scope || '').toLowerCase() === 'global';
+        const av = a.card || ctx.characterId;
+        const card = (ctx.characters || []).find(x => x && x.avatar === av);
+        const scoped = Array.isArray(card?.data?.extensions?.regex_scripts) ? card.data.extensions.regex_scripts : [];
+        const global = ctx.extensionSettings?.regex ?? [];
+        const useScoped = !wantGlobal && !!card;
+        const list = useScoped ? scoped : global;
         const hit = list.find(r => r.scriptName === a.scriptName);
-        if (!hit) return { change: 'create', note: `当前共 ${list.length} 条正则` };
+        const where = useScoped ? `角色卡 ${av} 的正则位` : '全局正则';
+        if (!hit) return { change: 'create', note: `${where}：当前共 ${list.length} 条` };
         const changed = ['findRegex', 'replaceString', 'placement', 'disabled'].filter(k => a[k] !== undefined && JSON.stringify(hit[k]) !== JSON.stringify(a[k]));
         return changed.length ? { change: 'update', note: `字段变化：${changed.join(', ')}` } : { change: 'noop' };
     });

@@ -14,6 +14,7 @@
  *   - 预设：POST /api/presets/save {name, apiId, preset}（官方 v1.19 端点）。
  */
 import { getContext } from '../../../extensions.js';
+import { charBy, scopedScripts, saveScoped, allowScoped } from './adv-lib-regex.js';
 
 const c = () => getContext();
 
@@ -217,17 +218,35 @@ export const TOOLS = [
     {
         name: 'regex.delete',
         kind: 'write',
-        desc: '删除一条正则脚本（extension_settings.regex + saveSettingsDebounced，与官方正则扩展一致）。',
-        params: { scriptName: '正则脚本名' },
-        run: a => {
+        desc: '删除一条正则脚本。默认先找当前角色卡的正则位（scoped），找不到再看全局；也可以传 scope 逼定一边。scope=card 只删卡里的，scope=global 只删全局的——两边可能有同名正则，不指定时按「先卡后全局」删第一条。',
+        params: {
+            scriptName: '正则脚本名',
+            scope: 'string 可选：card / global，留空自动（先卡后全局）',
+            card: 'string 可选，头像文件名',
+        },
+        run: async a => {
             if (!a.scriptName) throw new Error('需要 scriptName');
+            const want = String(a.scope || '').toLowerCase();
+            const ch = charBy(a.card);
+            if (want !== 'global' && ch) {
+                const scoped = scopedScripts(ch);
+                const idx = scoped.findIndex(r => r.scriptName === a.scriptName);
+                if (idx >= 0) {
+                    const list = scoped.slice();
+                    list.splice(idx, 1);
+                    await saveScoped(ch, list);
+                    allowScoped(ch);
+                    return { ok: true, removed: a.scriptName, scope: 'scoped', character: ch.avatar, total: list.length };
+                }
+                if (want === 'card') throw new Error(`这张卡里没有正则：${a.scriptName}`);
+            }
             const x = c();
             const list = x.extensionSettings.regex || [];
             const idx = list.findIndex(r => r.scriptName === a.scriptName);
-            if (idx < 0) throw new Error(`未找到正则：${a.scriptName}`);
+            if (idx < 0) throw new Error(`未找到正则：${a.scriptName}（卡内与全局都没有）`);
             list.splice(idx, 1);
-            x.saveSettingsDebounced();
-            return { ok: true, removed: a.scriptName, total: list.length };
+            x.saveSettingsDebounced?.();
+            return { ok: true, removed: a.scriptName, scope: 'global', total: list.length };
         },
     },
     {
