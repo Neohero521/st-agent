@@ -19,6 +19,14 @@ import {
 const MAX_MSGS_PER_SESSION = 200;   // 单会话最多保留多少条对话事实
 const KEEP_ON_COMPACT = 12;         // 压缩时保留的最近条数
 
+// 会话里允许出现的条目类型：task/final/ops 是上下文事实，tool/plan/error 只用于界面回放
+const KINDS = new Set(['task', 'final', 'ops', 'tool', 'plan', 'error']);
+// 过程条目带上结果原文（截断），刷新后才能点开看，但长度受控，避免撑爆存储
+const RESULT_SNAPSHOT_CHARS = 1400;
+
+const LEVEL_LABEL = { 1: '只读', 2: '写入', 3: '高危' };
+const LEVEL_CLS = { 1: 'sta-risk-1', 2: 'sta-risk-2', 3: 'sta-risk-3' };
+
 let _saveTimer = null;
 
 /* ------------------------------ 基础工具 ------------------------------ */
@@ -78,7 +86,12 @@ export function initSessions() {
             cardName: typeof s.cardName === 'string' ? s.cardName : '',
             messages: s.messages
                 .filter(m => m && typeof m.content === 'string' && (m.role === 'user' || m.role === 'assistant'))
-                .map(m => ({ role: m.role, content: m.content, kind: m.kind || (m.role === 'user' ? 'task' : 'final') })),
+                .map(m => ({
+                    role: m.role,
+                    content: m.content,
+                    kind: KINDS.has(m.kind) ? m.kind : (m.role === 'user' ? 'task' : 'final'),
+                    meta: typeof m.meta === 'string' ? m.meta : '',
+                })),
         }))
         .sort((a, b) => b.updatedAt - a.updatedAt);
 
@@ -257,19 +270,31 @@ export function renameSession(id, title) {
     return true;
 }
 
-/** 追加一条对话事实 */
-export function appendTurn(role, content, kind) {
+/**
+ * 追加一条会话条目。
+ * kind: task/final/ops 会进对话上下文；tool/plan/error 只用于界面回放。
+ * opts.flush=false 走防抖落盘（一个任务里连续十几个工具时不每次都全量写盘）
+ * opts.render=false 不重绘会话列表（同上，收尾时统一刷一次）
+ */
+export function appendTurn(role, content, kind, meta = '', opts = {}) {
     const s = getActiveSession();
     if (!s) return;
     const text = String(content == null ? '' : content);
     if (!text) return;
-    s.messages.push({ role, content: text, kind: kind || (role === 'user' ? 'task' : 'final') });
+    s.messages.push({
+        role,
+        content: text,
+        kind: kind || (role === 'user' ? 'task' : 'final'),
+        meta: typeof meta === 'string' ? meta : (meta ? JSON.stringify(meta) : ''),
+    });
     if (s.messages.length > MAX_MSGS_PER_SESSION) s.messages = s.messages.slice(-MAX_MSGS_PER_SESSION);
     s.updatedAt = nowIso();
     if (s.title === '新对话' || !s.title) s.title = autoTitle(text);
     if (!s.cardName) s.cardName = currentCardName();
     // 立即落盘：手机端切后台/杀进程时 beforeunload 不一定触发，靠防抖必丢
-    flushSessions();
+    if (opts.flush === false) saveSessions();
+    else flushSessions();
+    if (opts.render === false) return;
     renderSessionList();
 }
 
@@ -342,6 +367,49 @@ function stripToolCalls(text) {
     return { body, calls: n };
 }
 
+/**
+ * 回放一条工具动作。
+ * 关键：这些行以前只活在 DOM 里，页面一重载（手机切后台被回收）就全没了，
+ * 只剩收尾那条 ops 摘要——这就是用户说的"我一说话记录就被清空"。
+ * 现在动作随会话落盘，重载后按原样重放。
+ */
+function renderPersistedTool(log, m) {
+    let meta = {};
+    try { meta = JSON.parse(m.meta || '{}') || {}; } catch { meta = {}; }
+    const level = Number(meta.level) || 1;
+    const ok = meta.ok !== false;
+
+    const entry = document.createElement('div');
+    entry.className = `sta-log-item sta-tool ${LEVEL_CLS[level] || 'sta-risk-1'} ${ok ? 'sta-tool-ok' : 'sta-tool-fail'}`;
+
+    const head = document.createElement('div');
+    head.className = 'sta-log-head';
+    head.textContent = '工具';
+    const badge = document.createElement('span');
+    badge.className = `sta-risk-badge ${LEVEL_CLS[level] || 'sta-risk-1'}`;
+    badge.textContent = LEVEL_LABEL[level] || '只读';
+    head.appendChild(badge);
+
+    const body = document.createElement('div');
+    body.className = 'sta-log-body';
+    const brief = String(meta.brief || '').trim();
+    body.textContent = ok ? (brief ? `${m.content}  ${brief}` : m.content) : `${m.content} 失败`;
+
+    entry.append(head, body);
+
+    if (meta.result) {
+        const details = document.createElement('details');
+        details.className = 'sta-tool-result';
+        details.innerHTML = '<summary>查看结果</summary>';
+        const pre = document.createElement('pre');
+        pre.textContent = String(meta.result);
+        details.appendChild(pre);
+        entry.appendChild(details);
+    }
+
+    log.appendChild(entry);
+}
+
 export function renderSessionLog(session) {
     const view = currentView;
     if (!view || !view.log) return;
@@ -357,14 +425,26 @@ export function renderSessionLog(session) {
         return;
     }
 
+    // 有落盘的动作行时，收尾那条 ops 摘要就不用再显示了：
+    // 它和动作行说的是同一件事，重复摆两条只会让日志变吵。
+    // （它仍留在会话里，作为"上一轮动作"进上下文。）
+    const hasToolRows = s.messages.some(m => m.kind === 'tool');
+
     for (const m of s.messages) {
+        if (m.kind === 'tool') { renderPersistedTool(view.log, m); continue; }
+        if (m.kind === 'ops' && hasToolRows) continue;
         const entry = document.createElement('div');
         const isUser = m.role === 'user';
-        entry.className = 'sta-log-item ' + (isUser ? 'sta-user' : (m.kind === 'ops' ? 'sta-ops-summary' : 'sta-final'));
+        const kindCls = m.kind === 'ops' ? 'sta-ops-summary'
+            : m.kind === 'plan' ? 'sta-plan-line'
+                : m.kind === 'error' ? 'sta-error' : 'sta-final';
+        entry.className = 'sta-log-item ' + (isUser ? 'sta-user' : kindCls);
 
         const head = document.createElement('div');
         head.className = 'sta-log-head';
-        head.textContent = isUser ? '你' : (m.kind === 'ops' ? '动作' : 'Agent');
+        head.textContent = isUser ? '你' : (m.kind === 'ops' ? '动作'
+            : m.kind === 'plan' ? '计划'
+                : m.kind === 'error' ? '异常' : 'Agent');
 
         const body = document.createElement('div');
         body.className = 'sta-log-body';
@@ -405,10 +485,14 @@ export function renderSessionLog(session) {
 export function historyForContext(session) {
     const s = session || getActiveSession();
     if (!s || !s.messages.length) return [];
-    return s.messages.map(m => ({
-        role: m.role,
-        content: m.kind === 'ops'
-            ? `（上一轮动作：${m.content}）`
-            : m.content,
-    }));
+    // tool/plan/error 是给人看的过程记录，不进上下文：tool 行没有结果（结果已单独作为 tool_result 传过），
+    // 全带上只会把窗口塞满、还让模型以为这些是自己在说的
+    return s.messages
+        .filter(m => m.kind !== 'tool' && m.kind !== 'plan' && m.kind !== 'error')
+        .map(m => ({
+            role: m.role,
+            content: m.kind === 'ops'
+                ? `（上一轮动作：${m.content}）`
+                : m.content,
+        }));
 }
