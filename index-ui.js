@@ -104,27 +104,27 @@ export function buildPanel() {
 }
 
 export function bindPanel(root) {
-    const panel = $('.sta-panel', root);
-    const log = $('.sta-log', root);
-    const input = $('.sta-input', root);
-    const send = $('.sta-send', root);
-    const stop = $('.sta-stop', root);
-    const status = $('.sta-status', root);
-    const drawer = $('.sta-drawer', root);
-    const profileSel = $('.sta-profile', root);
-    const maxSteps = $('.sta-maxsteps', root);
-    const policy = $('.sta-approval-policy', root);
-    const streamMode = $('.sta-stream-mode', root);
-    const planMode = $('.sta-plan-mode', root);
-    const batchConfirm = $('.sta-batch-confirm', root);
-    const regTools = $('.sta-register-tools', root);
+    const panel = root.querySelector('.sta-panel');
+    const log = root.querySelector('.sta-log');
+    const input = root.querySelector('.sta-input');
+    const send = root.querySelector('.sta-send');
+    const stop = root.querySelector('.sta-stop');
+    const status = root.querySelector('.sta-status');
+    const drawer = root.querySelector('.sta-drawer');
+    const profileSel = root.querySelector('.sta-profile');
+    const maxSteps = root.querySelector('.sta-maxsteps');
+    const policy = root.querySelector('.sta-approval-policy');
+    const streamMode = root.querySelector('.sta-stream-mode');
+    const planMode = root.querySelector('.sta-plan-mode');
+    const batchConfirm = root.querySelector('.sta-batch-confirm');
+    const regTools = root.querySelector('.sta-register-tools');
 
     setCurrentView({ root, panel, log, input, send, stop, status, drawer, profileSel, maxSteps, policy, streamMode, planMode, batchConfirm, regTools });
 
-    $('.sta-fab', root).addEventListener('click', () => togglePanel(true));
-    $('.sta-close', root).addEventListener('click', () => togglePanel(false));
-    $('.sta-gear', root).addEventListener('click', () => { drawer.hidden = !drawer.hidden; });
-    $('.sta-drawer-close', root).addEventListener('click', () => { drawer.hidden = true; });
+    root.querySelector('.sta-fab').addEventListener('click', () => togglePanel(true));
+    root.querySelector('.sta-close').addEventListener('click', () => togglePanel(false));
+    root.querySelector('.sta-gear').addEventListener('click', () => { drawer.hidden = !drawer.hidden; });
+    root.querySelector('.sta-drawer-close').addEventListener('click', () => { drawer.hidden = true; });
 
     send.addEventListener('click', submitTask);
     stop.addEventListener('click', () => abortController?.abort());
