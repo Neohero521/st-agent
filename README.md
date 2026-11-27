@@ -12,17 +12,17 @@
 https://github.com/Neohero521/st-agent
 ```
 
-仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `adv-tools.js` / `adv-tools-v14.js` … `adv-tools-v18.js` / `style.css` 全在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
+仓库根目录就是扩展本体（`manifest.json` / `index.js` / `tools.js` / `adv-tools.js` / `adv-tools-v14.js` … `adv-tools-v19.js` / `style.css` 全在根上），酒馆克隆后直接识别，不需要手动挑子目录。装完刷新页面，右下角出现「Agent」悬浮球。
 
 **方式二：手动复制文件**
 
-把仓库根目录的**全部 `.js` 与 `.css`**（`manifest.json`、`index.js`、`tools.js`、`adv-tools.js`、`adv-tools-v14.js`…`adv-tools-v18.js`、`style.css`）放进
+把仓库根目录的**全部 `.js` 与 `.css`**（`manifest.json`、`index.js`、`tools.js`、`adv-tools.js`、`adv-tools-v14.js`…`adv-tools-v19.js`、`style.css`）放进
 
 ```
 <酒馆根目录>/data/<你的用户名>/extensions/st-agent/
 ```
 
-没有目录就自己建。`tools.js` / `adv-tools.js` 必须一起放（被 `index.js` import）；`adv-tools-v*.js` 是**按文件名动态 import** 的，缺哪个就少哪一层工具（v14 深改、v15 自动化链、v16 酒馆助手、v17 群聊体检、v18 安全网与磁盘），不会报错但会静默少功能——所以别只拷前五个文件，整目录一起拷。刷新页面即可。
+没有目录就自己建。`tools.js` / `adv-tools.js` 必须一起放（被 `index.js` import）；`adv-tools-v*.js` 是**按文件名动态 import** 的，缺哪个就少哪一层工具（v14 深改、v15 自动化链、v16 酒馆助手、v17 群聊体检、v18 安全网与磁盘、v19 连接层），不会报错但会静默少功能——所以别只拷前五个文件，整目录一起拷。刷新页面即可。
 
 **方式三：一条命令（本目录 / zip 版）**
 
@@ -69,7 +69,7 @@ bash install.sh /path/to/SillyTavern          # Linux / macOS / Termux
 条目级增改（只传要改的字段，新条目自动补全酒馆要求的默认字段），并且走 `loadWorldInfo` / `saveWorldInfo`，编辑器缓存同步。
 
 **提示词注入**：`inject.set` `inject.clear` `inject.list`
-把一段常驻文本插进提示词（`in_prompt` / `in_chat` + depth / `before_prompt`，可选 role 是否允许世界书扫描）。等于让 Agent 给你加“临时世界书”。
+把一段常驻文本插进提示词（`in_prompt` / `in_chat` + depth / `before_prompt`，可选 role 与是否允许世界书扫描）。等于让 Agent 给你加“临时世界书”。
 
 **正则**：`regex.test` `regex.setEnabled`
 拿真实正则对任意文本试跑看替换结果，错了不会弄脏聊天；也能一键启停全局/角色正则。
@@ -256,6 +256,20 @@ automation.list {}
 
 **没做的**：世界书改名（JSR 的 `renameWorldbook` 在源码里是**注释掉的**，`worldbook.ts:416`；原生 `/api/worldinfo/*` 也没有 rename，硬做会丢绑定）；`backup.chat/download` 是 `response.download` 浏览器下载，前端 fetch 拿不到内容；`secrets/*` 需要 `config.yaml` 的 `allowKeysExposure: true`，默认关闭，整块跳过。
 
+## 连接层、图库与资产搬运（v1.9）
+
+工具数 139 → 154。前面八版有个共同的空缺：Agent 能改角色卡、世界书、聊天、设置，却**不知道自己现在接的是哪个模型、这个 key 到底配没配、这个端点能生成什么**。这一版补的是「自我认知」和「资产搬运」。
+
+`api.state` `api.models` `api.key` `api.secrets` `api.switch` `img.index` `img.folders` `img.folderCreate` `img.assign` `img.cleanup` `file.upload` `file.delete` `preset.restore` `theme.save` `translate.run`
+
+- **连接层**：`api.state` 一句话说清「main_api 是啥、聊天补全源是哪家、模型名、端点、上下文与 token 上限、当前预设、哪些密钥配过」；`api.models` 拉当前 source 的模型清单——它同时就是一次**真实连通性测试**（能列出来说明 key 与端点都好用）；`api.key` 写/换密钥（服务端加密落盘，不回显）；`api.secrets` 只列脱敏值；`api.switch` 切 source/模型立即生效（改 `oai_settings` + `saveSettingsDebounced`），切 `main_api` 会写盘但提示 `needs_reload`。
+- **图库**：酒馆 1.13+ 的图片元数据索引（独立于真实文件系统）。`img.index` 看总图数/文件夹/打标数量，`img.folderCreate` 建分类，`img.assign` 批量归类或移出，`img.cleanup` 清「文件早就不在了」的孤立条目（不动真实图片）。
+- **资产搬运**：`file.upload` 把 base64 写成酒馆文件区文件并返回可引用路径；`file.delete` 删（需 confirm）；`preset.restore` 取出厂预设原样内容（只读，要真恢复得整份喂 `preset.save`）；`theme.save` 把整套主题变量落盘；`translate.run` 用酒馆内置翻译翻一段文本，不烧聊天额度。
+
+**密钥安全边界**：只用 `/api/secrets/read`（服务端已脱敏成 `sk-abc…`）。`secrets/view` 要 `config.yaml` 的 `allowKeysExposure: true`（默认 false）——所以**任何工具都不会把明文密钥交给模型**。
+
+**这一版踩的坑**：`/api/files/upload` 返回的是 `/user/files/…`（单数 `user`，不是 `users`）；`/api/translate/google` 在受限网络下直接 500，换 `bing` 立刻可用；`/api/presets/restore` 名字像「恢复」其实只返回内容不落盘；`/api/image-metadata/cleanup` 没有预演模式（所以第一版那个 `dryRun` 参数是假参数，已删）；`api.state` 第一版把 `getChatCompletionModel()` 直接叫 `model`，但 `main_api` 不是 openai 时它返回的是「聊天补全页里存的模型」而非实际在用的，已改名 `chat_completion_model` 并写清适用条件。
+
 ## 可选增强：磁盘桥接
 
 上面这些已经覆盖「酒馆内部文件」的全部 CRUD。如果你还想要**任意路径读写、grep 整个装包、跑 shell 命令**，再装 `st-agent-bridge`（服务端插件）：
@@ -294,7 +308,7 @@ automation.list {}
 酒馆开了 CSRF 保护时，扩展用的是酒馆自己的请求封装，正常不会触发；如果你手动改过 `request.js` 或用了反向代理改写，需要放行。
 
 **想确认装了几个工具**
-F12 执行 `STAgent.tools.length`：基础 139（进阶/自主/自动化/深改/自动化链/酒馆助手/群聊体检/安全网八层），装桥接是 148。
+F12 执行 `STAgent.tools.length`：基础 154（进阶/自主/自动化/深改/自动化链/酒馆助手/群聊体检/安全网/连接层九层），装桥接是 163。
 
 ## 开发
 
@@ -326,3 +340,6 @@ STAgent.run('列出所有世界书')
 - v1.7 的 `ext.maintain` 只对 git 安装的扩展有效；手动拷贝的目录会被明确拒绝（原因见上一节）
 - v1.8 的 `snap.restore` 覆盖完必须刷新页面；`maid.report` 会遍历用户目录，文件极多时要几秒
 - v1.8 的 `vec.*` 依赖酒馆配好的向量源；没配时 `vec.list` 返回 0，`vec.query` 才会真正报错（这是有意的，先探再查）
+- v1.9 的 `api.models` 对 `kobold` / `textgenerationwebui` 这类不提供模型清单的后端会返回空（它们走 `/api/backends/text-completions`，模型靠手填）
+- v1.9 的 `api.switch` 改 `main_api` 后要刷新页面才真正切过去（该变量是模块级的，`saveSettingsDebounced` 动不了它）
+- v1.9 的 `translate.run` 里 `google` 在部分网络（含国内直连）会 500，换 `bing` 通常可用；`deepl` / `libre` 需要先在设置页配好端点或密钥
