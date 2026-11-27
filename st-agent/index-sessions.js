@@ -287,6 +287,13 @@ export function appendTurn(role, content, kind, meta = '', opts = {}) {
     if (!s) return;
     const text = String(content == null ? '' : content);
     if (!text) return;
+    // 纯过程行（计划 / 异常）同内容紧邻重复时不再落库：
+    // 同一步里连着几次续写提示、同一条阶段结论反复出现，会把一个会话撑成几十条噪声，
+    // 回放时用户看到一墙重复，也白白吃掉存储预算。
+    if (kind === 'plan' || kind === 'error') {
+        const prev = s.messages[s.messages.length - 1];
+        if (prev && prev.kind === kind && prev.content === text) return;
+    }
     s.messages.push({
         role,
         content: text,
