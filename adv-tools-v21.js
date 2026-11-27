@@ -60,19 +60,37 @@ async function characterBy(a) {
 
 async function readonlyWorld(name) {
     const data = await c().loadWorldInfo(name);
-    if (!data) throw new Error(`世界书不存在：${name}`);
+    if (!data) throw new Error(`世界书不存在：${name || '未指定世界书名'}`);
     return data;
 }
 
 /* ------------------------------ 世界书激活 ------------------------------ */
 
+async function worldExists(ctx, name) {
+    // 权威判定：/api/worldinfo/list 直读磁盘文件名，不依赖前端缓存。
+    try {
+        const r = await fetch('/api/worldinfo/list', { method: 'POST', headers: ctx.getRequestHeaders(), body: '{}' });
+        if (r.ok) {
+            const list = await r.json();
+            if (Array.isArray(list) && list.length) {
+                return list.some(f => f?.file_id === name || f?.name === name);
+            }
+        }
+    } catch { /* 端点不可用则退回内存名单 */ }
+    const names = ctx.getWorldInfoNames?.() ?? ctx.world_names ?? [];
+    return Array.isArray(names) && names.length ? names.includes(name) : true;
+}
+
 async function activateWorld({ name, scope = 'chat', value = true, char } = {}) {
     if (!name) throw new Error('需要 name（世界书名）');
     const charName = char;
-    const names = c().getWorldInfoNames?.() ?? c().world_names ?? [];
-    if (Array.isArray(names) && names.length && !names.includes(name)) {
+    const ctx = c();
+    if (!(await worldExists(ctx, name))) {
         throw new Error(`世界书不存在：${name}（可用 world.list 查看）`);
     }
+    // 新建的书在前端缓存里往往还没有：拉一次列表把 world_names 与下拉框补上，
+    // 否则用户切到世界书面板会看不到这本书。
+    try { await ctx.updateWorldInfoList?.(); } catch { /* UI 未就绪时忽略 */ }
     const done = { ok: true, name, scope, active: !!value };
 
     if (scope === 'global') {
@@ -115,7 +133,19 @@ async function activateWorld({ name, scope = 'chat', value = true, char } = {}) 
             const j = await res.json().catch(() => ({}));
             throw new Error(j.message || `合并角色卡失败 HTTP ${res.status}`);
         }
+        // 与官方 world-info.js 同款收尾：merge 只改了磁盘，浏览器内存还是旧卡，
+        // 不重新拉一次，用户在当前会话里会一直看到旧绑定、以为没写进去。
+        if (typeof ctx.getOneCharacter === 'function') {
+            try { await ctx.getOneCharacter(target.avatar); } catch { /* 拉取失败则退回直接改内存 */ }
+        }
+        const fresh = (c().characters || []).find(ch => ch.avatar === target.avatar);
+        if (fresh) {
+            fresh.data = fresh.data || {};
+            fresh.data.extensions = fresh.data.extensions || {};
+            fresh.data.extensions.world = value ? name : '';
+        }
         done.avatar = target.avatar;
+        done.synced = true;
         return done;
     }
 
@@ -143,7 +173,7 @@ export const TOOLS = [
             const hit = a.uid !== undefined
                 ? entries.find(([k]) => String(k) === String(a.uid))
                 : entries.find(([, e]) => e?.comment === a.comment);
-            if (!hit) throw new Error(`未找到条目：${a.comment ?? a.uid}`);
+            if (!hit) throw new Error(`未找到条目：${a.comment ?? a.uid ?? '未指定标题或 uid'}`);
             return { ok: true, uid: hit[0], entry: hit[1] };
         },
     },
@@ -157,7 +187,7 @@ export const TOOLS = [
             const trees = treeOf(h, a.scope || 'global');
             let found = null;
             walkScripts(trees, t => { if (t?.name === a.name) found = t; return t; });
-            if (!found) throw new Error(`未找到脚本：${a.name}`);
+            if (!found) throw new Error(`未找到脚本：${a.name || '未指定脚本名'}`);
             return { ok: true, script: found, length: String(found.content || '').length };
         },
     },
@@ -179,7 +209,7 @@ export const TOOLS = [
                 .map(t => t?.type === 'folder'
                     ? { ...t, scripts: (t.scripts || []).filter(s => { if (s?.name === a.name) { removed = true; return false; } return true; }) }
                     : t);
-            if (!removed) throw new Error(`未找到脚本：${a.name}`);
+            if (!removed) throw new Error(`未找到脚本：${a.name || '未指定脚本名'}`);
             pushTree(h, next, scope);
             return { ok: true, name: a.name, scope };
         },
