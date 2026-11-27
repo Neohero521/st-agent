@@ -10,7 +10,8 @@ import { buildMenuEntry, togglePanel, setBusy, updateStatus, addLog, addStreamin
 import { askPlan, askApprovalBatch, askApproval, submitTask, populateProfiles, syncSettingsUI } from './index-ui3.js';
 import { registerChatTools } from './index-tools.js';
 import { refreshBridgeState, initialize } from './index.js';
-import { createSession, switchSession, deleteSession, renameSession, renderSessionList } from './index-sessions.js';
+import { createSession, switchSession, deleteSession, renameSession, renderSessionList, sessionDiag } from './index-sessions.js';
+import { journalInfo } from './index-persist.js';
 
 /* ------------------------------ UI ------------------------------ */
 
@@ -32,7 +33,7 @@ export function buildPanel() {
                     <div class="sta-logo">SA</div>
                     <div>
                         <div class="sta-title">ST Agent</div>
-                        <div class="sta-sub"><span class="sta-dot"></span><span class="sta-status">连接中…</span></div>
+                        <div class="sta-sub"><span class="sta-dot"></span><span class="sta-status">连接中…</span><span class="sta-ver">v?</span></div>
                     </div>
                 </div>
                 <div class="sta-head-actions">
@@ -121,6 +122,11 @@ export function buildPanel() {
                     <input class="sta-register-tools" type="checkbox" />
                 </label>
                 <div class="sta-hint">模型：默认用酒馆「API 连接」里的当前配置，不需要另建连接。<br>能力：<span class="sta-bridge-state">检测中…</span></div>
+                <div class="sta-field sta-selfcheck-row">
+                    <span>自检</span>
+                    <button type="button" class="sta-btn ghost sta-selfcheck-btn">跑一次</button>
+                </div>
+                <div class="sta-selfcheck-out">点「跑一次」，把下面这行发我就能定位手机端的问题。</div>
             </div>
             <div class="sta-sessions" hidden>
                 <div class="sta-sessions-head">
@@ -140,8 +146,7 @@ export function buildPanel() {
     return root;
 }
 
-export function bindPanel(root) {
-    const panel = root.querySelector('.sta-panel');
+export function bindPanel(root) {    const panel = root.querySelector('.sta-panel');
     const log = root.querySelector('.sta-log');
     const input = root.querySelector('.sta-input');
     const send = root.querySelector('.sta-send');
@@ -307,4 +312,81 @@ export function bindPanel(root) {
             if (e.key === 'Escape') { e.preventDefault(); commit(false); }
         });
     });
+
+    // 版本徽标 + 自检：手机端「到底装的是哪一版、记录到底写进去没有」必须一眼可查，
+    // 不然只能靠猜——这也是上一轮"改了但手机上没变化"说不清的地方。
+    showVersion();
+    const scBtn = root.querySelector('.sta-selfcheck-btn');
+    const scOut = root.querySelector('.sta-selfcheck-out');
+    if (scBtn && scOut) {
+        scBtn.addEventListener('click', () => { runSelfCheck(scOut); });
+    }
+}
+
+/** 从扩展目录读 manifest 的 version，写进标题旁并打一条 console */
+export async function showVersion() {
+    let ver = '';
+    try {
+        const url = new URL('manifest.json', import.meta.url).href + '?t=' + Date.now();
+        const res = await fetch(url, { cache: 'no-store' });
+        if (res.ok) {
+            const m = await res.json();
+            ver = String(m && m.version || '');
+        }
+    } catch { /* 读不到就显示 v? */ }
+    const el = (currentView && currentView.root ? currentView.root : document).querySelector('.sta-ver');
+    if (el) el.textContent = ver ? 'v' + ver : 'v?';
+    console.log('[st-agent] version', ver || '(unknown)');
+    return ver;
+}
+
+function clockOf(ts) {
+    const n = Number(ts) || 0;
+    if (!n) return '—';
+    const d = new Date(n);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+}
+
+/**
+ * 自检：一行字把「版本 / 会话与条目 / 副本有没有在写 / 角色卡与世界书到底刷出来没有」摆清楚。
+ * 手机端出问题时让用户念这一行，比来回猜十轮都快。
+ */
+export async function runSelfCheck(outEl) {
+    const box = outEl || (currentView && currentView.root ? currentView.root.querySelector('.sta-selfcheck-out') : null);
+    const parts = [];
+    try {
+        const ver = await showVersion();
+        parts.push(ver ? 'v' + ver : 'v?');
+    } catch { parts.push('v?'); }
+
+    try {
+        const d = sessionDiag();
+        parts.push(`会话${d.sessions}/条目${d.msgs}`);
+        if (d.recovered) parts.push(`启动回补${d.recovered}`);
+    } catch (e) { parts.push('会话读取失败'); }
+
+    try {
+        const j = journalInfo();
+        parts.push(j.exists ? `副本${j.sessions}个@${clockOf(j.savedAt)}${j.metaOnly ? '(仅目录)' : ''}` : '副本无');
+    } catch { parts.push('副本读失败'); }
+
+    try {
+        const rows = document.querySelectorAll('#rm_print_characters_block .character_select').length;
+        const books = document.querySelectorAll('#world_info option').length;
+        const c = ctx();
+        const chars = Array.isArray(c && c.characters) ? c.characters.length : -1;
+        parts.push(`角色卡${rows}行/数据${chars}`);
+        parts.push(`世界书${books > 0 ? books - 1 : 0}本`);
+    } catch { parts.push('界面计数失败'); }
+
+    try {
+        const w = window;
+        parts.push(`屏${w.innerWidth}x${w.innerHeight}`);
+        if (w.matchMedia && w.matchMedia('(pointer: coarse)').matches) parts.push('触屏');
+    } catch { /* ignore */ }
+
+    const line = parts.join(' · ');
+    if (box) box.textContent = line;
+    console.log('[st-agent] selfcheck:', line);
+    return line;
 }
