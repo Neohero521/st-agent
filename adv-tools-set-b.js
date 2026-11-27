@@ -36,9 +36,9 @@ export const ADV_TOOLS_B = [
     },
     {
         name: 'script.list', kind: 'read',
-        desc: '列出「酒馆助手」里的脚本/前端卡（需安装 JS-Slash-Runner 4.x）。',
-        params: {},
-        run: () => listScripts(),
+        desc: '列出「酒馆助手」里的脚本 / 前端卡 / 文件夹（含文件夹内脚本，需安装 JS-Slash-Runner 4.x）。',
+        params: { scope: 'global / preset / character，默认 global' },
+        run: a => listScripts(a),
     },
     {
         name: 'script.set', kind: 'write',
