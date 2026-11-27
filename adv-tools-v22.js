@@ -12,7 +12,8 @@
 import { loadBook, setEntry, getEntries, entryFields } from './adv-lib-world.js';
 import { c } from './adv-lib-core.js';
 import { toPlacement } from './tools-set-c.js';
-import { listSpill, readSpill } from './index-sessions.js';
+import { listSpill, readSpill, setTodos } from './index-sessions.js';
+import { getGoal, changeGoal } from './index-goal.js';
 
 /* ------------------------------ 固定模板 ------------------------------ */
 
@@ -737,6 +738,58 @@ export const TOOLS = [
             if (!item.id) delete item.id;
             const out = await putScript(ctx, local, av, item);
             return { ok: true, avatar: av, name: item.name, id: out.id || null, created: out.created, scripts: out.scripts, enabled: item.enabled };
+        },
+    },
+    {
+        name: 'todo.write',
+        kind: 'read',
+        desc: '维护本会话的任务清单：把多步工作拆成具体任务、标记进行中、完成后逐项勾掉。每次调用整表替换（没有逐条编辑、没有回读），同一份列表跨轮次、跨重开会话都在。只改会话状态，不动卡片与世界书。条目是 { content, status }，status 取 pending / in_progress / completed；content 必须非空、不重复，单条不超过 200 字。长任务（写一整张卡、批量改世界书）应该先写清单再动手。',
+        params: {
+            todos: 'array 必填，每次都是完整列表：[{ content: "…", status: "pending" }]',
+        },
+        run: async a => {
+            const counts = setTodos(a.todos, { allowParallelInProgress: true });
+            return `Updated todo list: ${counts.pending} pending, ${counts.inProgress} in progress, ${counts.completed} completed.`;
+        },
+    },
+    {
+        name: 'goal.get',
+        kind: 'read',
+        desc: '读本会话当前目标：objective、phase（active / paused / blocked / complete）、revision、Round 进度与 blocker。只存状态、不调度工作。',
+        params: {},
+        run: async () => ({ goal: getGoal() }),
+    },
+    {
+        name: 'goal.create',
+        kind: 'read',
+        desc: '为本会话创建长期完成目标（每会话只有一个；未完成的旧目标必须先 edit / pause / block / clear 掉）。只改会话状态。多步且要跨多轮的任务才需要目标，单轮任务不要建。',
+        params: {
+            objective: 'string 必填，要达成什么，一句话',
+            maxGoalRounds: 'number 可选，Round 上限，默认 256',
+        },
+        run: async a => changeGoal('create', { objective: a.objective, maxGoalRounds: a.maxGoalRounds }),
+    },
+    {
+        name: 'goal.update',
+        kind: 'read',
+        desc: '修改当前目标。action 取 edit / pause / resume / complete / block / clear；edit 改 objective 或上限，block 必须给 lower-kebab-case 的 blockerCode 与说明，clear 会移除目标但留下 tombstone。带 revision 时会被校验，拿旧视图改会被明确拒绝，这时先用 goal.get 重读。',
+        params: {
+            action: 'string 必填，edit / pause / resume / complete / block / clear',
+            revision: 'number 可选，当前 revision（比较并设置，防止旧视图覆盖）',
+            objective: 'string 可选，edit 时的新目标',
+            maxGoalRounds: 'number 可选，edit 时的 Round 上限',
+            blockerCode: 'string block 时必填，lower-kebab-case，例如 budget-exhausted / needs-user-input',
+            blockerNote: 'string 可选，block 的人话说明',
+        },
+        run: async a => {
+            const goal = changeGoal(a.action, {
+                revision: a.revision,
+                objective: a.objective,
+                maxGoalRounds: a.maxGoalRounds,
+                blockerCode: a.blockerCode,
+                blockerNote: a.blockerNote,
+            });
+            return { goal, note: a.action === 'clear' ? '已清除当前目标，revision 留在 tombstone 里' : '' };
         },
     },
     {

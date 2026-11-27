@@ -4,7 +4,9 @@ import { ctx, loadSettings, saveSettings, pingBridge, getProfiles, generateRawFn
 import { typewrite, MODEL_FIELD, buildChatPayload, streamChatCompletion } from './index-stream.js';
 import { buildSystemPrompt } from './index-prompt.js';
 import { parseToolCalls, repairJson, buildCall, extractFinal, sumChars, compactHistory, stepGenerate, continueText, detectTruncation, stripToolMarkup } from './index-loop.js';
-import { ensureActiveSession, historyForContext, appendTurn, flushSessions, renderSessionList, renderSessionLog, pruneResultText, forceCompact, pushSpill } from './index-sessions.js';
+import { ensureActiveSession, historyForContext, appendTurn, flushSessions, renderSessionList, renderSessionLog, pruneResultText, forceCompact, maybeCompact, pushSpill, setSummarizer, getTodos, COMPACT_INSTRUCTION } from './index-sessions.js';
+import { resetRepeat, noteRepeat, toolTimeoutMs, withTimeout } from './index-guard.js';
+import { goalShouldContinue, noteGoalRound, getGoal } from './index-goal.js';
 import { HIGH_RISK_PATTERNS, RISK_META, riskOf, batchLines, executeTool, summarizeArgs, briefArgs, takeRefreshNote } from './index-risk.js';
 import { html, buildPanel, bindPanel } from './index-ui.js';
 import { buildMenuEntry, togglePanel, setBusy, updateStatus, addLog, addStreamingDraft } from './index-ui2.js';
@@ -25,6 +27,30 @@ function toolMeta(ok, brief, level, payload) {
             result: String(payload == null ? '' : payload).slice(0, 1400),
         });
     } catch { return ''; }
+}
+
+/**
+ * 把「任务清单 + 目标」贴到 system 尾部。
+ * DSH 里这两样是会话投影（给 UI 看），工具不自带注入；这里它们同时也要给模型看见，
+ * 否则模型不知道清单里还剩什么、也不会遵守 goal 的 phase。
+ */
+function taskStateBlock(session) {
+    const lines = [];
+    const todos = getTodos(session);
+    if (todos.length) {
+        lines.push('', '## 当前任务清单（todo.write 整表维护）');
+        for (const t of todos) {
+            const mark = t.status === 'completed' ? '[x]' : (t.status === 'in_progress' ? '[→]' : '[ ]');
+            lines.push(`- ${mark} ${t.content}`);
+        }
+    }
+    const goal = getGoal(session);
+    if (goal) {
+        lines.push('', '## 当前目标（goal）');
+        lines.push(`- ${goal.objective}`);
+        lines.push(`- phase=${goal.phase}｜第 ${goal.roundsStarted}/${goal.maxGoalRounds} 轮${goal.blocker ? `｜blocker=${goal.blocker.code}${goal.blocker.note ? '（' + goal.blocker.note + '）' : ''}` : ''}`);
+    }
+    return lines.length ? lines.join('\n') : '';
 }
 
 function isTokenLimitError(error) {
@@ -48,6 +74,16 @@ export async function runAgent(task) {
     setAbortController(new AbortController());
     setBusy(true);
 
+    // 新的一轮用户消息：重复调用计数清零（跟 DSH 一样，全新指令绝不算循环）
+    resetRepeat();
+    // 摘要请求接上模型：压缩时先落本地检查点，再让模型照八段结构写一份更好的替换掉
+    setSummarizer(async dialog => {
+        const { text } = await streamChatCompletion([
+            { role: 'user', content: `${dialog}\n\n---\n${COMPACT_INSTRUCTION}` },
+        ], {});
+        return text;
+    });
+
     const view = currentView;
 
     // —— 续接：接着当前会话的历史往下走，而不是每次从零开 ——
@@ -69,7 +105,7 @@ export async function runAgent(task) {
     const history = historyForContext(session);
 
     const system = await buildSystemPrompt();
-    setMessages([{ role: 'system', content: system }, ...history, { role: 'user', content: task }]);
+    setMessages([{ role: 'system', content: system + taskStateBlock(session) }, ...history, { role: 'user', content: task }]);
     appendTurn('user', task, 'task');
 
     let steps = 0;
@@ -84,6 +120,21 @@ export async function runAgent(task) {
             if (abortController?.signal?.aborted) { addLog('error', '已停止'); break; }
             steps++;
             updateStatus(`第 ${steps} 步 · 生成中`);
+
+            // —— 请求前压力检查（DSH compaction-basic 的 pre-step 版）——
+            // 超阈值就压成检查点 + 保留最近 12 条，本轮上下文随之重建，不再靠丢消息腾空间
+            try {
+                if (steps > 1 && await maybeCompact(session)) {
+                    const sys = messages[0] && messages[0].role === 'system' ? messages[0] : null;
+                    const tail = messages.slice(-12);
+                    const cp = session.checkpoint ? [{ role: 'user', content: String(session.checkpoint) }] : [];
+                    messages.splice(0, messages.length, ...(sys ? [sys] : []), ...cp, ...tail);
+                    addLog('plan', `历史过长：已压成检查点（${session.checkpointBy === 'model' ? '模型摘要' : '本地摘要'}），逐字保留最近 12 条`);
+                    appendTurn('assistant', `历史超过阈值，已压成检查点（${session.checkpointBy === 'model' ? '模型摘要' : '本地摘要'}）`, 'plan', '', { flush: false, render: false });
+                }
+            } catch (error) {
+                console.warn('[st-agent] 预压缩失败：', error && error.message);
+            }
 
             const draft = addStreamingDraft();
             let generated;
@@ -111,7 +162,7 @@ export async function runAgent(task) {
                 //    这比"降 maxTokens"更对路——超限是历史太长，不是输出太长，降档只会让回复更短还照样超。
                 if (!overflowRetried && isContextOverflow(error)) {
                     overflowRetried = true;
-                    forceCompact(session, 6);
+                    await forceCompact(session, 6);
                     const sys = messages[0] && messages[0].role === 'system' ? messages[0] : null;
                     const tail = messages.slice(-6);
                     const cp = session.checkpoint ? [{ role: 'user', content: String(session.checkpoint) }] : [];
@@ -234,11 +285,13 @@ export async function runAgent(task) {
                     });
                     continue;
                 }
+                // 循环卫生：同一工具 + 完全相同的参数连续调用，到 3/5/8 次给一句提醒（只建议不否决）
+                const repeatNote = noteRepeat(call.name, call.args);
                 if (denied.has(call)) {
                     addLog('tool', call.name, '已被用户拒绝', 'denied', riskOf(call));
                     messages.push({
                         role: 'user',
-                        content: `<tool_result name="${call.name}" ok="false">用户拒绝执行该操作。</tool_result>`,
+                        content: `<tool_result name="${call.name}" ok="false">用户拒绝执行该操作。</tool_result>${repeatNote ? `\n${repeatNote}` : ''}`,
                     });
                     continue;
                 }
@@ -249,11 +302,13 @@ export async function runAgent(task) {
                 let payload;
                 let ok = true;
                 try {
-                    const result = await executeTool(call);
+                    // 只给声明了限时的工具（web.fetch / web.search 30s）设协作式上限，
+                    // 到点返回清晰的 TOOL_TIMEOUT 错误，而不是把整个会话拖住
+                    const result = await withTimeout(executeTool(call), toolTimeoutMs(call.name), call.name);
                     payload = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
                 } catch (error) {
                     ok = false;
-                    payload = `执行失败：${error.message}`;
+                    payload = error && error.code === 'TOOL_TIMEOUT' ? error.message : `执行失败：${error.message}`;
                 }
                 entry.setResult(payload, ok);
                 entry.setRefresh(takeRefreshNote());
@@ -269,7 +324,7 @@ export async function runAgent(task) {
                 const spilled = spillId ? `\n（结果过长，已存为 spill #${spillId}（原文 ${String(payload).length} 字）。要看细节用 spill.read 带 id 与 offset 分段取，不要重复调用同一个工具）` : '';
                 messages.push({
                     role: 'user',
-                    content: `<tool_result name="${call.name}" ok="${ok}">${pruneResultText(payload)}${spilled}</tool_result>`,
+                    content: `<tool_result name="${call.name}" ok="${ok}">${pruneResultText(payload)}${spilled}</tool_result>${repeatNote ? `\n${repeatNote}` : ''}`,
                 });
             }
 
@@ -302,6 +357,12 @@ export async function runAgent(task) {
         if (savedMaxTokens !== null) {
             settings.maxTokens = savedMaxTokens;
             syncSettingsUI();
+        }
+        // 目标还在 active：这次跑完算用掉一个 Round（上限靠它约束）
+        try {
+            if (goalShouldContinue(session)) noteGoalRound(session);
+        } catch (error) {
+            console.warn('[st-agent] 目标 Round 记录失败：', error && error.message);
         }
         setRunning(false);
         setAbortController(null);

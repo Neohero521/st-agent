@@ -205,11 +205,14 @@ export function pruneResultText(text) {
 }
 
 /**
- * 会话检查点：把要被压缩掉的旧消息整理成结构化摘要。
- * 纯本地生成、不额外调模型（手机端多一次请求就是几秒等待 + 一份额度），
- * 结构按 deepseek-harness 的 checkpoint 八段裁到与写卡/酒馆任务相关的六段。
+ * 会话检查点。
+ *
+ * 口径照搬 deepseek-harness `compaction-basic`：把最旧的一段换成一条
+ * `<compacted-summary>` + 固定前导语，最近 N 条逐字保留；摘要本身由**一次独立模型请求**产出
+ * （输入是那段对话原文 + 冻结的八段指令，输出只取文本，不取推理）。
+ * 本地确定性摘要只作为兜底：模型请求失败/超时/被取消时，历史照样不会丢。
  */
-function buildCheckpoint(drop) {
+function buildCheckpoint(drop, keep = KEEP_ON_COMPACT) {
     const clip = (v, n) => {
         const s = String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
         return s.length > n ? s.slice(0, n) + '…' : s;
@@ -221,7 +224,7 @@ function buildCheckpoint(drop) {
     const tools = [...new Set(drop.filter(m => m.kind === 'tool' && m.tool).map(m => String(m.tool)))];
     const lines = [];
     lines.push('<compacted-summary>');
-    lines.push('（这是本会话此前对话的自动检查点，属于既有背景：直接在此基础上继续，不要复述、不要回应这段。）');
+    lines.push(CHECKPOINT_LEAD);
     lines.push('');
     lines.push('## 目标');
     if (tasks.length) {
@@ -241,28 +244,120 @@ function buildCheckpoint(drop) {
     if (finals.length) for (const f of finals.slice(-5)) lines.push('- ' + f);
     else lines.push('- （无）');
     lines.push('## 压缩时点');
-    lines.push(`- 共压缩 ${drop.length} 条历史；逐字保留最近 ${KEEP_ON_COMPACT} 条`);
+    lines.push(`- 共压缩 ${drop.length} 条历史；逐字保留最近 ${keep} 条`);
     lines.push('</compacted-summary>');
     return lines.join('\n');
 }
 
-/** 把一条会话压成「检查点 + 最近 N 条」，返回是否真的压了 */
-function compactSession(s, keep = KEEP_ON_COMPACT) {
+/* ------------------------------ 模型摘要（照抄 compaction-basic 的辅助请求） ------------------------------ */
+
+/** 检查点前导语：与 DSH 原文同义（原文是英文，这里给中文模型用）。 */
+const CHECKPOINT_LEAD = '本检查点自动生成，用于压缩此前一段对话、腾出上下文。把这里记录的内容当作既有背景，在其之上继续；不要复述它，也不要回应它，直接从后面的消息接着干。';
+
+/** 摘要请求的最终 user 消息：八段结构、「空段写（无）」「不要提压缩这件事」等规则照抄。 */
+export const COMPACT_INSTRUCTION = `你现在是本会话的压缩引擎。把上面的对话压成一份结构化检查点，让另一个模型在不丢关键上下文的前提下接着干活。
+
+严格按下面的 Markdown 结构输出，段落一个都不能少、顺序不能变。用简洁的短句条目，不要写散文段落。空段落写「（无）」，绝不省略段落。
+
+## 主要请求与意图
+- 用户最初的目标，以及中途如何变化；措辞关键处原样引用
+
+## 关键技术概念
+- 涉及的框架、规范、接口与约定（酒馆宏 / 世界书 / MVU 变量 / 正则 / 脚本 等）
+
+## 文件与代码
+- 精确路径：为什么重要、改了什么关键片段
+
+## 报错与修复
+- 报错原文：怎么解决的，以及相关的用户反馈
+
+## 未完成的事
+- 用户明确要求但还没做完的部分
+
+## 当前正在进行
+- 压缩这一刻正在做什么
+
+## 下一步
+- 与最近一次请求直接对齐的唯一下一步动作；没有就写「（无）」
+
+## 关键上下文
+- 已定的决策与理由、约束、用户偏好、悬而未决的问题、继续干需要的数据
+
+规则：
+- 用简洁的中文工程表述。精确路径、命令、报错字符串、标识符、数值、函数签名与语法片段一律原样保留。
+- 如实记下用户的反馈和明确指令，尤其是纠错。
+- 不要提这次摘要请求，也不要提上下文被压缩过。
+- 只输出检查点正文：不调用任何工具，不做别的动作。
+- 如果对话里已经有 <compacted-summary>，那是上一次的检查点：不要原样抄过来，留仍然成立的，丢掉过期的，把新信息并进同一份结构里。`;
+
+// 摘要请求自身的输入上限：DSH 明说摘要请求不拆分，装不下就失败。这里截断，避免它自己先爆。
+const SUMMARY_INPUT_CHARS = 24000;
+
+let summarizer = null;
+
+/** 注入摘要用的模型调用（输入一段对话文本，返回摘要文本）。由主循环在启动时接上。 */
+export function setSummarizer(fn) {
+    summarizer = typeof fn === 'function' ? fn : null;
+}
+
+function labelOf(m) {
+    const map = { task: '用户任务', tool: '工具结果', final: '结论', ops: '动作摘要', error: '报错', plan: '计划', user: '用户', assistant: '助手' };
+    if (m.kind && map[m.kind]) return map[m.kind];
+    return m.role === 'user' ? '用户' : '助手';
+}
+
+async function summarizeWithModel(dialog) {
+    if (!summarizer) return null;
+    const body = String(dialog || '');
+    if (!body.trim()) return null;
+    let text;
+    try {
+        text = await summarizer(body.slice(-SUMMARY_INPUT_CHARS));
+    } catch (error) {
+        console.warn('[st-agent] 摘要请求失败：', error && error.message);
+        return null;
+    }
+    const clean = String(text || '').trim();
+    // 段落太少说明模型没按结构写，宁可用本地摘要
+    if (!clean || (clean.match(/^## /gm) || []).length < 4) return null;
+    return '<compacted-summary>\n' + CHECKPOINT_LEAD + '\n\n' + clean.replace(/^<compacted-summary>\s*/i, '').replace(/<\/compacted-summary>\s*$/i, '').trim() + '\n</compacted-summary>';
+}
+
+/**
+ * 把一条会话压成「检查点 + 最近 N 条」。
+ * 本地摘要先同步落地（await 之前就写进 session），模型摘要成功后再替换，失败保留本地版。
+ */
+export async function compactSession(s, keep = KEEP_ON_COMPACT) {
     if (!Array.isArray(s.messages) || s.messages.length <= keep) return false;
     const drop = s.messages.slice(0, s.messages.length - keep);
-    s.checkpoint = buildCheckpoint(drop);
+    const dialog = drop.map(m => `【${labelOf(m)}】${String(m && m.content || '')}`).join('\n\n');
+    s.checkpoint = buildCheckpoint(drop, keep);
     s.messages = s.messages.slice(-keep);
     s.compacted = true;
     s.compactedAt = nowIso();
     s.compactCount = (Number(s.compactCount) || 0) + 1;
+    s.checkpointBy = 'local';
+    const better = await summarizeWithModel(dialog);
+    if (better) {
+        s.checkpoint = better;
+        s.checkpointBy = 'model';
+    }
     return true;
 }
 
 /** 手动强制压缩（上下文超限重试时用）：逐字只留 keep 条 */
-export function forceCompact(session, keep = 6) {
+export async function forceCompact(session, keep = 6) {
     const s = session || getActiveSession();
     if (!s) return false;
     return compactSession(s, Math.max(2, Number(keep) || 6));
+}
+
+/** 请求前检查压力：超过阈值才压，返回是否压了（照 DSH 的 pre-step 版） */
+export async function maybeCompact(session) {
+    const s = session || getActiveSession();
+    if (!s) return false;
+    if (sessionChars(s) < CHECKPOINT_TRIGGER_CHARS) return false;
+    return compactSession(s, KEEP_ON_COMPACT);
 }
 
 /* ------------------------------ 大结果 spill（对标 deepseek-harness spill 家族） ------------------------------ */
@@ -331,8 +426,12 @@ export function prune() {
     }
 
     // 单会话超阈值的先各自压一次：压缩本身就能腾出空间，别等到总预算爆了再按时间淘汰别人
+    // 单会话超阈值的先各自压一次：本地摘要同步落地（模型摘要随后异步替换），
+    // 因此不必等 await 也不会丢历史
     for (const s of sessions) {
-        if (sessionChars(s) > CHECKPOINT_TRIGGER_CHARS) compactSession(s);
+        if (sessionChars(s) > CHECKPOINT_TRIGGER_CHARS) {
+            compactSession(s).catch(error => console.warn('[st-agent] 压缩失败：', error && error.message));
+        }
     }
 
     const budget = Math.max(50000, Number(settings.sessionCharBudget) || 1200000);
@@ -353,7 +452,8 @@ export function prune() {
         if (total <= budget) break;
         if (!s.messages.length) continue;
         const before = sessionChars(s);
-        if (!compactSession(s)) {
+        // 预算压力下也走检查点：压不动（消息比保留数还少）才退到只留 4 条
+        if (!(awaitFreeCompact(s))) {
             s.messages = s.messages.slice(-4);
             s.compacted = true;
         }
@@ -367,6 +467,56 @@ export function prune() {
             s.compacted = true;
         }
     }
+}
+
+/** compactSession 的同步壳：本地摘要立刻落地，模型摘要异步补上；返回「有没有真的压」 */
+function awaitFreeCompact(s, keep = KEEP_ON_COMPACT) {
+    if (!Array.isArray(s.messages) || s.messages.length <= keep) return false;
+    compactSession(s, keep).catch(error => console.warn('[st-agent] 压缩失败：', error && error.message));
+    return true;
+}
+
+/* ------------------------------ 会话任务清单（照 DSH todo_write：整表替换、单一会话归属） ------------------------------ */
+
+const TODO_STATUS = ['pending', 'in_progress', 'completed'];
+
+export function getTodos(session) {
+    const s = session || getActiveSession();
+    if (!s || !Array.isArray(s.todos)) return [];
+    return s.todos.map(t => ({ content: t.content, status: t.status }));
+}
+
+/**
+ * 整表替换。校验与 DSH 一致：content 必须非空、不能重复、status 三态之一，
+ * 不允许并行时最多一条 in_progress。失败抛错，绝不静默丢条目。
+ */
+export function setTodos(list, opts = {}) {
+    const s = getActiveSession();
+    if (!s) throw new Error('todo.write requires an owning agent session');
+    const items = Array.isArray(list) ? list : [];
+    const allowParallel = opts.allowParallelInProgress !== false;
+    const seen = new Set();
+    const out = [];
+    items.forEach((raw, i) => {
+        const content = String(raw && raw.content != null ? raw.content : '').trim();
+        if (!content) throw new Error(`Error: invalid arguments: todos[${i}].content must be a non-empty string`);
+        if (content.length > 200) throw new Error(`Error: invalid arguments: todos[${i}].content is too long (max 200)`);
+        if (seen.has(content)) throw new Error(`Error: invalid arguments: todos[${i}].content duplicates "${content}"`);
+        seen.add(content);
+        const status = String(raw && raw.status || 'pending');
+        if (!TODO_STATUS.includes(status)) throw new Error(`Error: invalid arguments: todos[${i}].status must be one of ${TODO_STATUS.join(', ')}`);
+        out.push({ content, status });
+    });
+    const running = out.filter(t => t.status === 'in_progress').length;
+    if (!allowParallel && running > 1) {
+        throw new Error(`Error: invalid arguments: at most one task may be in_progress (got ${running})`);
+    }
+    s.todos = out;
+    return {
+        pending: out.filter(t => t.status === 'pending').length,
+        inProgress: running,
+        completed: out.filter(t => t.status === 'completed').length,
+    };
 }
 
 /* ------------------------------ 会话 CRUD ------------------------------ */
@@ -552,6 +702,13 @@ export function renderSessionList() {
             parts.push(cp ? `已压缩${s.compactCount > 1 ? '×' + s.compactCount : ''}（检查点 ${cp} 字）` : '已压缩');
         }
         if (Array.isArray(s.spill) && s.spill.length) parts.push(`暂存 ${s.spill.length} 份大结果`);
+        if (Array.isArray(s.todos) && s.todos.length) {
+            const done = s.todos.filter(t => t.status === 'completed').length;
+            parts.push(`清单 ${done}/${s.todos.length}`);
+        }
+        if (s.goal && s.goal.phase && s.goal.phase !== 'complete') {
+            parts.push(`目标 ${s.goal.roundsStarted || 0}/${s.goal.maxGoalRounds}${s.goal.phase === 'blocked' ? '·阻塞' : s.goal.phase === 'paused' ? '·暂停' : ''}`);
+        }
         meta.textContent = parts.join(' · ');
 
         main.append(title, meta);
