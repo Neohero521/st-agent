@@ -30,12 +30,24 @@ function toolMeta(ok, brief, level, payload) {
 }
 
 /**
- * 把「任务清单 + 目标」贴到 system 尾部。
- * DSH 里这两样是会话投影（给 UI 看），工具不自带注入；这里它们同时也要给模型看见，
- * 否则模型不知道清单里还剩什么、也不会遵守 goal 的 phase。
+ * 把「时间 + 常驻指令 + 任务清单 + 目标」贴到 system。
+ * 前三样分别对应 DSH context 组的 time-context / agent-instructions，
+ * 后两样是 todo / goal 两个家族的投影——DSH 里它们只给 UI 看，
+ * 这里同时给模型看，否则模型不知道清单剩什么、也不会遵守 goal 的 phase。
  */
-function taskStateBlock(session) {
+function taskStateBlock(session, startedAt = Date.now()) {
     const lines = [];
+    // 时间：写卡场景里日期一致性、日志时间、"现在几点"都靠它，不能让模型自己猜
+    const now = new Date();
+    let stamp;
+    try {
+        stamp = now.toLocaleString('zh-CN', { hour12: false });
+    } catch { stamp = now.toISOString(); }
+    const elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+    lines.push('', '## 现在');
+    lines.push(`- 本地时间：${stamp}（${Intl.DateTimeFormat().resolvedOptions().timeZone || '本地时区'}）`);
+    lines.push(`- 本次任务已进行 ${elapsed} 秒`);
+
     const todos = getTodos(session);
     if (todos.length) {
         lines.push('', '## 当前任务清单（todo.write 整表维护）');
@@ -101,11 +113,15 @@ export async function runAgent(task) {
     const hint = view.log.querySelector('.sta-hint');
     if (hint) hint.remove();
     addLog('user', task);
+    const startedAt = Date.now();
 
     const history = historyForContext(session);
 
     const system = await buildSystemPrompt();
-    setMessages([{ role: 'system', content: system + taskStateBlock(session) }, ...history, { role: 'user', content: task }]);
+    // 常驻指令（DSH agent-instructions 的口径：每轮都在，且放在最前，不会被工具说明挤掉）
+    const instr = String(settings.instructions || '').trim();
+    const head = instr ? `## 常驻指令（用户设定，始终遵守，优先于本提示其余风格建议）\n${instr}\n\n` : '';
+    setMessages([{ role: 'system', content: head + system + taskStateBlock(session, startedAt) }, ...history, { role: 'user', content: task }]);
     appendTurn('user', task, 'task');
 
     let steps = 0;

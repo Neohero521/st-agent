@@ -71,6 +71,11 @@ export function buildPanel() {
                     <input class="sta-maxsteps" type="number" min="1" max="100" />
                 </label>
                 <label class="sta-field">
+                    <span>常驻指令（每轮都在，始终生效）</span>
+                    <textarea class="sta-instr" rows="3" placeholder="例如：写卡一律中文、变量写中文键名、不要用 XML 包裹 MVU 变量、UI 走 Galgame 暗金风"></textarea>
+                    <span class="sta-field-tip">放进 system 最前面，比本插件其余风格建议优先。适合放长期习惯，不适合放一次性的任务要求。</span>
+                </label>
+                <label class="sta-field">
                     <span>单次输出上限（token）</span>
                     <input class="sta-maxtokens" type="number" min="512" max="65536" step="512" />
                     <span class="sta-field-tip">这条上限来自本插件，不是 API 页的 Max Response Length。太小则长回复会被切在半句，被切会自动续写，但一次写完更顺。</span>
@@ -197,6 +202,18 @@ export function bindPanel(root) {    const panel = root.querySelector('.sta-pane
 
     profileSel.addEventListener('change', () => { settings.profileId = profileSel.value; saveSettings(); });
     maxSteps.addEventListener('change', () => { settings.maxSteps = Math.max(1, Number(maxSteps.value) || 20); saveSettings(); });
+    const instr = root.querySelector('.sta-instr');
+    if (instr) {
+        instr.value = String(settings.instructions || '');
+        instr.addEventListener('change', () => {
+            settings.instructions = instr.value.slice(0, 2000);
+            saveSettings();
+        });
+        instr.addEventListener('input', () => {
+            instr.style.height = 'auto';
+            instr.style.height = Math.min(instr.scrollHeight, 140) + 'px';
+        });
+    }
     maxTokens.addEventListener('change', () => {
         settings.maxTokens = Math.min(65536, Math.max(512, Number(maxTokens.value) || 8192));
         saveSettings();

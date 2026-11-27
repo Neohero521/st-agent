@@ -11,6 +11,7 @@
 
 import { ctx, saveSettings } from './index-boot.js';
 import { stripToolMarkup } from './index-loop.js';
+import { estimateTokens, estimateMessage, contextBreakdown } from './index-usage.js';
 import { journalSave, journalMerge } from './index-persist.js';
 import {
     MODULE, settings, currentView, running,
@@ -25,14 +26,18 @@ const KEEP_ON_COMPACT = 12;         // 压缩时逐字保留的最近条数
  * 上下文压力策略（对标 deepseek-harness packages/compaction 的做法）：
  *  · 工具结果修剪：超 8192 码点的结果，保留头 4096 + 尾 1024，中间打标记。
  *    头尾都留是关键——结论、报错、回执通常在末尾，只截前 1400 字会把它们全丢掉。
- *  · 会话检查点：单会话超过 CHECKPOINT_TRIGGER_CHARS 时，把最旧部分压成一条检查点，
+ *  · 会话检查点：单会话超过 CHECKPOINT_TRIGGER_TOKENS 时，把最旧部分压成一条检查点，
  *    近期消息逐字保留，后续请求从检查点继续，而不是把老消息直接扔掉。
  */
 const RESULT_PRUNE_CHARS = 8192;
 const RESULT_PRUNE_HEAD = 4096;
 const RESULT_PRUNE_TAIL = 1024;
 const RESULT_PRUNE_MARK = '\n\n[... 结果中段已裁剪 ...]\n\n';
-const CHECKPOINT_TRIGGER_CHARS = 80000;
+/**
+ * 触发值按「token」而不是字符：DSH 的阈值单位就是 token，而中文一个字约等于一个 token，
+ * 用 80000 字符当阈值等于把 8 万 token 的会话硬塞进 32k 窗口——压缩永远来不及。
+ */
+const CHECKPOINT_TRIGGER_TOKENS = 20000;
 
 // 会话里允许出现的条目类型：task/final/ops 是上下文事实，tool/plan/error 只用于界面回放
 const KINDS = new Set(['task', 'final', 'ops', 'tool', 'plan', 'error']);
@@ -107,6 +112,14 @@ function sessionChars(s) {
     let n = String(s.checkpoint || '').length;
     for (const m of s.messages) n += String(m && m.content || '').length;
     if (Array.isArray(s.spill)) for (const x of s.spill) n += String(x && x.text || '').length;
+    return n;
+}
+
+/** 会话当前占多少 token：口径与 index-usage 一致（CJK 一字一 token） */
+function sessionTokens(s) {
+    if (!s || !Array.isArray(s.messages)) return 0;
+    let n = estimateTokens(s.checkpoint || '');
+    for (const m of s.messages) n += estimateMessage(m);
     return n;
 }
 
@@ -356,7 +369,7 @@ export async function forceCompact(session, keep = 6) {
 export async function maybeCompact(session) {
     const s = session || getActiveSession();
     if (!s) return false;
-    if (sessionChars(s) < CHECKPOINT_TRIGGER_CHARS) return false;
+    if (sessionTokens(s) < CHECKPOINT_TRIGGER_TOKENS) return false;
     return compactSession(s, KEEP_ON_COMPACT);
 }
 
@@ -429,7 +442,7 @@ export function prune() {
     // 单会话超阈值的先各自压一次：本地摘要同步落地（模型摘要随后异步替换），
     // 因此不必等 await 也不会丢历史
     for (const s of sessions) {
-        if (sessionChars(s) > CHECKPOINT_TRIGGER_CHARS) {
+        if (sessionTokens(s) > CHECKPOINT_TRIGGER_TOKENS) {
             compactSession(s).catch(error => console.warn('[st-agent] 压缩失败：', error && error.message));
         }
     }
@@ -527,6 +540,64 @@ export function getSession(id) {
 
 export function getActiveSession() {
     return getSession(activeSessionId);
+}
+
+/**
+ * 会话引用（对标 deepseek-harness context/session-reference）：
+ * 提及另一个会话，取它的一段「有界只读快照」进上下文——不是把整段历史搬进来。
+ * 上限刻意压得小：快照是用来接上「上次写到哪」，不是用来重放。
+ */
+export function listSessionsBrief() {
+    return sessions.map(s => ({
+        id: s.id,
+        title: String(s.title || ''),
+        messages: Array.isArray(s.messages) ? s.messages.length : 0,
+        tokens: sessionTokens(s),
+        compacted: !!s.compacted,
+        updatedAt: s.updatedAt,
+        active: s.id === activeSessionId,
+    })).sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/** 有界快照：按时间顺序挑「任务 + 结论」，总长不超过 chars */
+export function snapshotSession(id, chars = 1200) {
+    const s = getSession(String(id || '')) || getActiveSession();
+    if (!s) return null;
+    const budget = Math.max(200, Math.min(4000, Number(chars) || 1200));
+    const picked = [];
+    let used = 0;
+    const facts = (s.messages || []).filter(m => m && (m.kind === 'task' || m.kind === 'final' || m.kind === 'user'));
+    for (let i = facts.length - 1; i >= 0; i--) {
+        const body = String(facts[i].content || '').replace(/\s+/g, ' ').trim();
+        if (!body) continue;
+        const piece = `[${facts[i].kind === 'task' ? '任务' : '结论'}] ${body.slice(0, 400)}`;
+        if (used + piece.length > budget) break;
+        picked.unshift(piece);
+        used += piece.length;
+    }
+    return {
+        id: s.id,
+        title: String(s.title || ''),
+        tokens: sessionTokens(s),
+        messages: (s.messages || []).length,
+        checkpoint: String(s.checkpoint || '').slice(0, budget),
+        snapshot: picked.join('\n'),
+        truncated: picked.length < facts.length,
+    };
+}
+
+/** 上下文构成：system / 工具 / 对话 各自占多少（对标 contextBreakdown） */
+export function usageOf(id, toolSchemas = '') {
+    const s = id ? getSession(String(id)) : getActiveSession();
+    const list = s ? (s.messages || []) : [];
+    const b = contextBreakdown(list, toolSchemas);
+    return {
+        session: s ? s.id : '',
+        ...b,
+        checkpointTokens: s ? estimateTokens(s.checkpoint || '') : 0,
+        thresholdTokens: CHECKPOINT_TRIGGER_TOKENS,
+        compacted: !!s?.compacted,
+    };
 }
 
 export function ensureActiveSession() {

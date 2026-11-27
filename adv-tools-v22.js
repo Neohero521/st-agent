@@ -12,7 +12,7 @@
 import { loadBook, setEntry, getEntries, entryFields } from './adv-lib-world.js';
 import { c } from './adv-lib-core.js';
 import { toPlacement } from './tools-set-c.js';
-import { listSpill, readSpill, setTodos } from './index-sessions.js';
+import { listSpill, readSpill, setTodos, listSessionsBrief, snapshotSession, usageOf } from './index-sessions.js';
 import { getGoal, changeGoal } from './index-goal.js';
 
 /* ------------------------------ 固定模板 ------------------------------ */
@@ -791,6 +791,31 @@ export const TOOLS = [
             });
             return { goal, note: a.action === 'clear' ? '已清除当前目标，revision 留在 tombstone 里' : '' };
         },
+    },
+    {
+        name: 'session.list',
+        kind: 'read',
+        desc: '列出本插件的会话（id / 标题 / 条数 / token / 是否已压缩 / 最后更新），当前会话标 active。跨会话接活时先用它找目标，再用 session.peek 取有界快照。',
+        params: {},
+        run: async () => ({ items: listSessionsBrief() }),
+    },
+    {
+        name: 'session.peek',
+        kind: 'read',
+        desc: '读另一个会话的有界只读快照（任务与结论，上限 chars 字，默认 1200，最多 4000），用来接上「上次写到哪」而不是重放整段历史。省略 id 就是当前会话。',
+        params: { id: 'string 可选，会话 id（session.list 里拿）', chars: 'number 可选，快照字符上限，默认 1200' },
+        run: async a => {
+            const snap = snapshotSession(a.id, a.chars);
+            if (!snap) throw new Error('没有这个会话');
+            return snap;
+        },
+    },
+    {
+        name: 'usage.get',
+        kind: 'read',
+        desc: '看当前会话的上下文占用：system / 对话各多少 token、检查点多少、压缩阈值多少、是否已压缩。口径是 CJK 一字≈1 token（DSH 的 4 字符/token 对中文会低估到压缩来不及）。',
+        params: { id: 'string 可选，会话 id，默认当前' },
+        run: async a => usageOf(a.id),
     },
     {
         name: 'spill.list',

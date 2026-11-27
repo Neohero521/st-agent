@@ -27,6 +27,7 @@ export const DEFAULT_SETTINGS = {
     streamMode: 'auto',   // auto | off：chat completion 后端逐字流式
     sessionLimit: 20,     // 最多保留多少个会话（超出按最后使用时间淘汰）
     sessionCharBudget: 1200000, // 会话总字符预算，超出后先压缩最旧会话
+    instructions: '',     // 常驻指令（对标 DSH 的 AGENTS.md：每轮都进 system，始终生效）
     schemaVersion: 3,     // 设置迁移标记
 };
 

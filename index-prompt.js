@@ -185,6 +185,19 @@ ${toolsPrompt()}${advToolsPrompt()}
 4. findRegex 写成 \`/pattern/flags\` 字面量；替换串用 \`$1\` 引用分组、\`{{match}}\` 是整段匹配。只有想在 findRegex 里使用 \`{{char}}\` 这类宏时才设 substituteRegex=1（原文）或 2（转义），默认 0。
 5. \`runOnEdit\` 决定编辑消息后是否重跑；同一 scriptName 反复 upsert 是更新而不是新增，不要用近似名字堆同一条正则。
 
+## 控制面索引（要动酒馆里的东西，先按这张表选工具，别自己造轮子）
+- 角色卡：\`char.list\` 找卡 → \`char.get\` 读字段 → \`char.fields\` 看哪些字段可改 → \`char.edit\` 改（description / personality / scenario / mes_example / first_mes / alternate_greetings / tags / creator_notes / system_prompt / post_history_instructions）；\`char.create\` / \`char.duplicate\` / \`char.rename\` / \`char.delete\` / \`char.merge\`；\`char.book\` 看这张卡绑了哪本世界书。
+- 世界书：\`world.list\` / \`world.get\` / \`world.create\` / \`world.save\` / \`world.delete\`；\`world.activate\` 切全局启用；\`lore.bind\` 卡与书绑定；\`lore.settings\` 改扫描深度 / 递归 / 预算。
+- 聊天与消息：\`chat.list\` / \`chat.recent\` / \`chat.search\` / \`chat.get\` / \`chat.new\` / \`chat.close\` / \`chat.branch\` / \`chat.delete\` / \`chat.rename\`；楼层级用 \`msg.get\` / \`msg.set\` / \`msg.create\` / \`msg.delete\` / \`msg.swipe\` / \`msg.rotate\` / \`msg.continue\` / \`msg.render\` / \`msg.trigger\`。
+- 酒馆助手（JS-Slash-Runner）：\`th.status\` 先看装没装、什么版本；\`script.list\`（scope=global/preset/character）→ \`script.get\` → \`script.set\` / \`script.upsert\` / \`script.delete\`；脚本里用的数据变量走 \`var.*\`（scope=chat/message/global/character）；事件走 \`event.on\` / \`event.off\` / \`event.list\` / \`event.test\`；注入走 \`inject.set\` / \`inject.list\` / \`inject.clear\`。
+- 正则：\`regex.list\` / \`regex.upsert\` / \`regex.delete\` / \`regex.test\`。
+- 预设与生成：\`preset.list\` / \`preset.load\` / \`preset.save\` / \`preset.prompts\` / \`preset.restore\` / \`preset.delete\`；\`sampler.get\` / \`sampler.set\`；\`api.state\` / \`api.switch\` / \`api.models\` / \`api.key\`；\`gen.info\` / \`gen.models\` / \`gen.raw\` / \`gen.stop\`。
+- 宏与计数：\`macro.expand\` 先验证 \`{{user}}\` / \`{{char}}\` / \`{{getvar::x}}\` / \`{{time}}\` 到底展不展开；\`token.count\` 用酒馆自己的分词器核预算。
+- 备份与回滚：\`snap.make\` / \`snap.list\` / \`snap.load\` / \`snap.restore\`；\`ops.journals\` / \`ops.undo\` 看本轮改了什么并整体撤回；\`backup.chats\`。
+- 其它：\`group.*\`（群聊）、\`persona.*\`（用户人设）、\`qr.*\`（快捷回复）、\`theme.*\` / \`bg.*\` / \`img.*\` / \`file.*\` / \`extension.*\`（主题、背景、图片、文件、扩展安装）、\`st.command\`（跑斜杠命令）、\`automation.*\` / \`audit.run\` / \`ext.maintain\`（自动化与自检）。
+- 自己这边：\`session.list\` / \`session.peek\` 看别的会话写到哪、\`usage.get\` 看上下文占多少、\`spill.*\` 取回被裁的大结果、\`todo.write\` / \`goal.*\` 管长任务。
+- 改之前先读：字段名不清楚就 \`char.fields\` / \`world.get\` / \`preset.prompts\`，凭猜写字段是这类操作最常见的坏账。
+
 ## 上下文、长结果与历史（长任务 / 大结果时）
 1. 工具结果超过约 8000 字时，系统只把「头 4096 字 + 尾 1024 字」放进上下文，中间打标记，并附一句 \`spill #rN\`。那里面的完整原文还在。需要中间细节就 \`spill.read\` 带 id 和 offset 分段取（一次 6000 字），不要重复调用那个昂贵工具。
 2. \`spill.list\` 看本会话暂存了哪些大结果（id / 工具名 / 原长 / 预览）；spill 只保留最近 6 份，旧的会被淘汰。

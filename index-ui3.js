@@ -254,4 +254,6 @@ export function syncSettingsUI() {
     if (currentView.planMode) currentView.planMode.checked = !!settings.planMode;
     if (currentView.batchConfirm) currentView.batchConfirm.checked = !!settings.batchConfirm;
     if (currentView.regTools) currentView.regTools.checked = !!settings.registerChatTools;
+    const instr = currentView.root?.querySelector?.('.sta-instr');
+    if (instr && !instr.matches(':focus')) instr.value = String(settings.instructions || '');
 }
