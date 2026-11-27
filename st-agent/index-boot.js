@@ -13,6 +13,13 @@ import { refreshBridgeState, initialize } from './index.js';
 
 export function ctx() { return getContext(); }
 
+/** 数值设置兜底：脏存档里的 null / 空串 / NaN 会让循环直接不跑，表现成"一开口就报错" */
+function clampNum(v, min, max, def) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return def;
+    return Math.min(max, Math.max(min, Math.round(n)));
+}
+
 export function loadSettings() {
     const c = ctx();
     c.extensionSettings[MODULE] = c.extensionSettings[MODULE] || {};
@@ -26,6 +33,16 @@ export function loadSettings() {
         c.extensionSettings[MODULE] = settings;
         c.saveSettingsDebounced?.();
     }
+    // 兜住手改存档 / 老版本迁移留下的非法值：maxSteps=NaN 会让 while 一次都不循环，
+    // 直接吐"已达到最大步数"；maxTokens 过大则每次请求都被服务端打回。
+    settings.maxSteps = clampNum(settings.maxSteps, 1, 100, DEFAULT_SETTINGS.maxSteps);
+    settings.maxTokens = clampNum(settings.maxTokens, 512, 65536, DEFAULT_SETTINGS.maxTokens);
+    settings.chatContextTurns = clampNum(settings.chatContextTurns, 2, 40, DEFAULT_SETTINGS.chatContextTurns);
+    settings.maxHistoryChars = clampNum(settings.maxHistoryChars, 2000, 200000, DEFAULT_SETTINGS.maxHistoryChars);
+    settings.sessionLimit = clampNum(settings.sessionLimit, 1, 200, DEFAULT_SETTINGS.sessionLimit);
+    settings.sessionCharBudget = clampNum(settings.sessionCharBudget, 50000, 5000000, DEFAULT_SETTINGS.sessionCharBudget);
+    if (!['auto', 'write', 'all'].includes(settings.approval)) settings.approval = DEFAULT_SETTINGS.approval;
+    if (!['auto', 'off'].includes(settings.streamMode)) settings.streamMode = DEFAULT_SETTINGS.streamMode;
     c.extensionSettings[MODULE] = settings;
 }
 
