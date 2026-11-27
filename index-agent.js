@@ -3,7 +3,7 @@ import { MODULE, BRIDGE_ID, DEFAULT_SETTINGS, settings, abortController, running
 import { ctx, loadSettings, saveSettings, pingBridge, getProfiles, generateRawFn, getGenerateRaw, serializeHistory, rawGenerate } from './index-boot.js';
 import { typewrite, MODEL_FIELD, buildChatPayload, streamChatCompletion } from './index-stream.js';
 import { buildSystemPrompt } from './index-prompt.js';
-import { parseToolCalls, repairJson, buildCall, extractFinal, sumChars, compactHistory, stepGenerate, continueText, detectTruncation } from './index-loop.js';
+import { parseToolCalls, repairJson, buildCall, extractFinal, sumChars, compactHistory, stepGenerate, continueText, detectTruncation, stripToolMarkup } from './index-loop.js';
 import { ensureActiveSession, historyForContext, appendTurn, flushSessions, renderSessionList, renderSessionLog } from './index-sessions.js';
 import { HIGH_RISK_PATTERNS, RISK_META, riskOf, batchLines, executeTool, summarizeArgs, briefArgs, takeRefreshNote } from './index-risk.js';
 import { html, buildPanel, bindPanel } from './index-ui.js';
@@ -120,9 +120,10 @@ export async function runAgent(task) {
             const planMatch = /<plan>([\s\S]*?)<\/plan>/i.exec(reply);
 
             if (calls.length === 0) {
-                const shown = final || reply || '（模型没有输出内容）';
+                const cleanReply = stripToolMarkup(reply);
+                const shown = stripToolMarkup(final) || cleanReply || '（模型没有输出内容）';
                 draft.finalize({ keep: true, text: shown, reasoning: generated.reasoning });
-                messages.push({ role: 'assistant', content: reply });
+                messages.push({ role: 'assistant', content: cleanReply || '（模型没有输出内容）' });
                 finished = true;
                 finalText = shown;
                 // 续写次数用完了还没闭合：说清楚是上限不够，而不是模型不想写了

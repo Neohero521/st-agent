@@ -10,6 +10,7 @@
  */
 
 import { ctx, saveSettings } from './index-boot.js';
+import { stripToolMarkup } from './index-loop.js';
 import { journalSave, journalMerge } from './index-persist.js';
 import {
     MODULE, settings, currentView, running,
@@ -545,12 +546,17 @@ export function historyForContext(session) {
     if (!s || !s.messages.length) return [];
     // tool/plan/error 是给人看的过程记录，不进上下文：tool 行没有结果（结果已单独作为 tool_result 传过），
     // 全带上只会把窗口塞满、还让模型以为这些是自己在说的
-    return s.messages
+    const rows = s.messages
         .filter(m => m.kind !== 'tool' && m.kind !== 'plan' && m.kind !== 'error')
         .map(m => ({
             role: m.role,
             content: m.kind === 'ops'
                 ? `（上一轮动作：${m.content}）`
-                : m.content,
-        }));
+                : String(m.content == null ? '' : m.content),
+        }))
+        // 老会话里存着模型写坏的调用块（<call_call ...>、它自己伪造的 <tool_result ...>）。
+        // 原样回灌等于教它继续这么写，所以每次取上下文都清一遍——旧脏档也跟着自愈。
+        .map(m => (m.role === 'assistant' ? { role: m.role, content: stripToolMarkup(m.content) } : m))
+        .filter(m => m.content && m.content.trim());
+    return rows;
 }

@@ -85,45 +85,85 @@ function headEndOf(src, from) {
     return -1;
 }
 
-/** 把 src 里所有 <tool_call ...>body</tool_call ...> 扫出来，返回 [{name, body, start, end}] */
+/**
+ * 开/闭标签一律按"任意前缀 + call"认：<tool_call / <call_call / <callcall / <call。
+ * 模型在生成时会写坏标签名（手机上实测过 <call_call>，等于把 call 重复了一个词），
+ * 只认 <tool_call 的结果就是整段调用被当成正文摆出来、看着像卡死。
+ */
+const OPEN_CALL_RE = /<[A-Za-z_]{0,12}call(?=[\s>/])/gi;
+const CLOSE_CALL_RE = /<\/[A-Za-z_]{0,12}call(?=[\s>])/gi;
+
+function findOpenCall(src, from) {
+    OPEN_CALL_RE.lastIndex = from;
+    const m = OPEN_CALL_RE.exec(src);
+    if (!m) return null;
+    return { start: m.index, len: m[0].length };
+}
+
+function findCloseCall(src, from) {
+    CLOSE_CALL_RE.lastIndex = from;
+    const m = CLOSE_CALL_RE.exec(src);
+    if (!m) return null;
+    return { start: m.index, len: m[0].length };
+}
+
+/** 把 src 里所有 <xxx_call ...>body</xxx_call ...> 扫出来，返回 [{name, body, start, end}] */
 function scanCallBlocks(src) {
     const out = [];
-    const low = src.toLowerCase();
     let pos = 0;
-    while (pos < low.length) {
-        const open = low.indexOf('<tool_call', pos);
-        if (open < 0) break;
-        const headEnd = headEndOf(src, open + 10);
+    while (pos < src.length) {
+        const open = findOpenCall(src, pos);
+        if (!open) break;
+        const headEnd = headEndOf(src, open.start + open.len);
         if (headEnd < 0) break;
-        let close = low.indexOf('</tool_call', headEnd);
+        const attrs = src.slice(open.start + open.len, headEnd - 1);
+        let close = findCloseCall(src, headEnd);
         // 正文里本身就可能写着 </tool_call>（写卡器脚本 / 正则内容常带这个串），
         // 那样会提前闭合、把参数 JSON 断在半路。若按这个闭合点切出来的 JSON 是不完整的，
         // 就继续往后找闭合，最多试 4 个；真找不到完整的还能退回"未闭合"分支。
-        for (let tries = 0; close >= 0 && tries < 4; tries++) {
-            const cut = src.slice(headEnd, close).trim();
+        for (let tries = 0; close && tries < 4; tries++) {
+            const cut = src.slice(headEnd, close.start).trim();
             if (!cut) break;
             if (cut[0] !== '{' && cut[0] !== '[') break;
             if (tryJson(cut)) break;
-            const next = low.indexOf('</tool_call', close + 11);
-            if (next < 0) break;
+            const next = findCloseCall(src, close.start + close.len);
+            if (!next) { close = null; break; }
             close = next;
         }
-        const closeEnd = close < 0 ? -1 : headEndOf(src, close + 11);
+        const closeEnd = close ? headEndOf(src, close.start + close.len) : -1;
         if (closeEnd < 0) {
             // 未闭合：交给截断检测，这里只记录残块
-            out.push({ name: pickName(src.slice(open + 10, headEnd - 1)), body: src.slice(headEnd), start: open, end: src.length, unclosed: true });
+            out.push({ name: pickName(attrs), body: src.slice(headEnd), start: open.start, end: src.length, unclosed: true });
             break;
         }
         out.push({
-            name: pickName(src.slice(open + 10, headEnd - 1)),
-            body: src.slice(headEnd, close),
-            start: open,
+            name: pickName(attrs),
+            body: src.slice(headEnd, close.start),
+            start: open.start,
             end: closeEnd,
             unclosed: false,
         });
         pos = closeEnd;
     }
     return out;
+}
+
+/**
+ * 从「给模型看的历史」和「界面正文」里剥掉调用/结果的原始标签。
+ * 模型会把调用写成 <call_call ...>，也会自己伪造 <tool_result ok="true">
+ * 装成工具已经回过话。这些串一旦留在上下文里，下一轮它照着坏格式继续写，
+ * 越滚越歪——界面上看到的就是一串标签加上几句解释，活干不完。
+ */
+export function stripToolMarkup(text) {
+    let s = String(text == null ? '' : text);
+    s = s.replace(/<[A-Za-z_]{0,12}call\b[^>]*>[\s\S]*?<\/[A-Za-z_]{0,12}call\s*>/gi, '');
+    // 模型自己"写"出来的工具结果整块删掉：内容是它编的，留着会以为自己已经拿到了回执
+    s = s.replace(/<tool_result\b[^>]*>[\s\S]*?<\/tool_result\s*>/gi, '');
+    s = s.replace(/<[A-Za-z_]{0,12}call\b[^>]*>/gi, '');
+    s = s.replace(/<\/[A-Za-z_]{0,12}call\s*>/gi, '');
+    s = s.replace(/<\/?tool_result[^>]*>/gi, '');
+    s = s.replace(/<\/?result\b[^>]*>/gi, '');
+    return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 /**
