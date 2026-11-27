@@ -15,7 +15,7 @@ export function allRegexes() {
 
 export function buildRegExp(pattern) {
     const s = String(pattern ?? '');
-    const m = /^\/([\s\S]*)\/\s([gimsuy]*)$/.exec(s.trim());
+    const m = /^\/([\s\S]*)\/([gimsuy]*)$/.exec(s.trim());
     if (m) {
         try { return new RegExp(m[1], m[2].includes('g') ? m[2] : m[2] + 'g'); } catch { return null; }
     }
