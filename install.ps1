@@ -41,9 +41,9 @@ New-Item -ItemType Directory -Force -Path $ExtDir | Out-Null
 $ExtTarget = Join-Path $ExtDir "st-agent"
 if (Test-Path $ExtTarget) { Remove-Item $ExtTarget -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $ExtTarget | Out-Null
-# 全部 .js 一起拷：adv-tools-v14..v19 是探针按文件名动态 import 的，漏一个那层工具就静默失效
+# 全部 .js 一起拷：adv-tools-v14..v21 是探针按文件名动态 import 的，漏一个那层工具就静默失效
 Get-ChildItem -Path $Src -File | Where-Object { $_.Extension -in ".js", ".css" } | Copy-Item -Destination $ExtTarget -Force
-Write-Host ("  扩展层文件 " + (Get-ChildItem -Path $ExtTarget -Filter "adv-tools-v*.js" -File).Count + " 个（adv-tools-v*.js）")
+Write-Host ("  扩展层文件 " + (Get-ChildItem -Path $ExtTarget -Filter "adv-tools-v*.js" -File).Count + " 个（应为 8：v14..v21）")
 Write-Host "OK 扩展 -> $ExtTarget"
 
 # 3. 可选：磁盘桥接
@@ -60,7 +60,7 @@ if ($WithBridge) {
         $content = Get-Content $Config -Raw
         if ($content -match 'enableServerPlugins:\s*false') {
             Copy-Item $Config "$Config.bak" -Force
-            $content = $content -replace 'enableServerPlugins:\s*false', 'enableServerPlugins: true'
+            $content = $content -replace 'enableServerPlugins: false', 'enableServerPlugins: true'
             Set-Content $Config $content -NoNewline
             Write-Host "OK 已在 config.yaml 开启 enableServerPlugins（原文件备份为 config.yaml.bak）"
         }
@@ -69,4 +69,4 @@ if ($WithBridge) {
 
 Write-Host ""
 Write-Host "完成。刷新酒馆页面，右下角出现「Agent」悬浮球。"
-Write-Host "自检：F12 控制台执行 STAgent.tools.length（无桥接 154，有桥接 163）"
+Write-Host "自检：F12 控制台执行 STAgent.tools.length（无桥接 165，有桥接 174）"
