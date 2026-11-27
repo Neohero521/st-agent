@@ -11,7 +11,7 @@
 
 import { ctx, saveSettings } from './index-boot.js';
 import {
-    MODULE, settings, currentView,
+    MODULE, settings, currentView, running,
     sessions, activeSessionId,
     setSessions, setActiveSessionId,
 } from './index-state.js';
@@ -229,6 +229,9 @@ export function installSessionPersistence() {
 }
 
 export function switchSession(id) {
+    // 任务在跑时不许切：批准卡 / 计划卡是挂在这块日志上的，切走会把卡一起重绘掉，
+    // 那个 await 就永远等不到答复，面板看起来卡死在"生成中"。
+    if (running) return false;
     const s = getSession(id);
     if (!s) return false;
     setActiveSessionId(id);
@@ -240,6 +243,7 @@ export function switchSession(id) {
 }
 
 export function deleteSession(id) {
+    if (running) return false;   // 同上：跑着的时候删会话同样会把待确认的卡弄丢
     const idx = sessions.findIndex(s => s.id === id);
     if (idx < 0) return false;
     sessions.splice(idx, 1);
@@ -277,7 +281,9 @@ export function renameSession(id, title) {
  * opts.render=false 不重绘会话列表（同上，收尾时统一刷一次）
  */
 export function appendTurn(role, content, kind, meta = '', opts = {}) {
-    const s = getActiveSession();
+    // 任务跑完才回写结论：万一运行中用户切了会话，必须写回发起任务的那个会话，
+    // 否则结论会串到别人的对话里（这也是"记录像被搬走了一样"的成因之一）。
+    const s = (opts.sessionId && getSession(opts.sessionId)) || getActiveSession();
     if (!s) return;
     const text = String(content == null ? '' : content);
     if (!text) return;
