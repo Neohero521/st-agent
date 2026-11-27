@@ -39,6 +39,8 @@ function chatContextBlock() {
                 .replace(/[ \t\r\n]+/g, ' ')
                 .trim();
             if (!body) continue;
+            // 酒馆在没选角色 / AI 未接入时会自己插一条固定占位语，带着进上下文只是噪音
+            if (!m?.is_user && /如果您已连接到|试着问我点什么|If you.*API connected|try asking me something/i.test(body)) continue;
             const who = m?.is_user ? '用户' : (String(m?.name || '').trim() || '角色');
             picked.push(`${who}: ${body.length > CHAT_LINE_LIMIT ? body.slice(0, CHAT_LINE_LIMIT) + '…' : body}`);
         }
