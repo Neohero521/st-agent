@@ -71,7 +71,7 @@ function pickName(attrs) {
 }
 
 /** 找到一个开标签的 '>' 位置（返回 '>' 之后的下标，找不到返回 -1）
- *  必须跳过引号里的 '>'：属性值里带 '>'（例如 data="a>b"）时，
+ *  必须跳过引号里的 '>'：属性值里带 '>'（例 data="a>b"）时，
  *  停在第一个 '>' 会把标签截断，后面整条调用跟着断。
  */
 function headEndOf(src, from) {
@@ -126,9 +126,64 @@ function scanCallBlocks(src) {
     return out;
 }
 
+/**
+ * 另一套工具调用语法：DeepSeek 系后端（以及部分 OpenAI 兼容网关）会把 tool_calls
+ * 序列化成 DSML —— <|DSML|`invoke name="char.get"> … <|DSML|`parameter name="k">v …
+ * 不认这套写法时，整段调用会被当成正文原样摆出来，表现就是"输出停在这里不动了"。
+ */
+function parseDsml(src) {
+    const calls = [];
+    const INV = /<[|｜][^<>]{0,40}?invoke\b([^>]*)>/gi;
+    const invs = [];
+    let m;
+    while ((m = INV.exec(src)) !== null) {
+        invs.push({ attrs: m[1] || '', start: m.index, end: INV.lastIndex });
+    }
+    for (let i = 0; i < invs.length; i++) {
+        const cur = invs[i];
+        const name = pickName(cur.attrs);
+        if (!name) continue;
+        const stop = i + 1 < invs.length ? invs[i + 1].start : src.length;
+        const body = src.slice(cur.end, stop);
+        const args = {};
+        const PAR = /<[|｜][^<>]{0,40}?parameter\b([^>]*)>/gi;
+        const ps = [];
+        let p;
+        while ((p = PAR.exec(body)) !== null) {
+            const at = p[1] || '';
+            const nm = pickName(at);
+            // 没有 name 的一律不进列表：闭合标记 </<|DSML|`parameter> 里也可能出现 <|，
+            // 一旦把它当成参数开标签，上一个参数的值就会被提前切断（文件名变成 "…png</"）。
+            if (!nm) continue;
+            ps.push({ attrs: at, name: nm, start: p.index, end: PAR.lastIndex });
+        }
+        for (let j = 0; j < ps.length; j++) {
+            const key = ps[j].name;
+            const vEnd = j + 1 < ps.length ? ps[j + 1].start : body.length;
+            // 值到第一个 DSML 标记为止：从标记起整段丢弃（跨行），
+            // 否则文件名/JSON 尾巴会带上 "…png</" 这类残渣。
+            let val = String(body.slice(ps[j].end, vEnd)).replace(/<[\/<\s]*[|｜][\s\S]*$/, '').trim();
+            if (!val) { args[key] = ''; continue; }
+            // 没有 string="true" 标记时按字面量还原：布尔/数字参数用文本传过去会被工具判类型错
+            if (!/string\s*=\s*["']?true/i.test(ps[j].attrs || '')) {
+                if (/^(?:true|false)$/i.test(val)) { args[key] = val.toLowerCase() === 'true'; continue; }
+                if (/^-?\d+(?:\.\d+)?$/.test(val)) { args[key] = Number(val); continue; }
+            }
+            const obj = tryJson(val);
+            // 只有能解析成对象/数组时才当结构化参数，其余一律按原文（"true"、"1" 不该被改成布尔数字）
+            args[key] = (obj && typeof obj === 'object') ? obj : val;
+        }
+        calls.push({ name, args, raw: src.slice(cur.start, stop) });
+    }
+    return calls;
+}
+
 export function parseToolCalls(text) {
     const src = String(text || '');
     const calls = [];
+
+    // 0) DSML 风格（DeepSeek 系序列化）先认：不认的话后面会把整段当正文显示出去
+    for (const call of parseDsml(src)) calls.push(call);
 
     // 1) <tool_call name=...>body</tool_call>：双引号 / 单引号 / 裸名都认
     let rest = src;
@@ -321,6 +376,11 @@ export function detectTruncation(text, maxTokens) {
     const full = String(text ?? '');
     if (!full.trim()) return { truncated: false, reason: '' };
     const low = full.toLowerCase();
+
+    // ⓪ DSML 调用被切断：有 invoke 却没有 calls 收尾，说明整段断在半路
+    if (/<[|｜]/.test(full) && /invoke\b/i.test(full) && !/(?:tool_)?calls\s*>\s*$/i.test(full.trimEnd())) {
+        return { truncated: true, reason: 'DSML 调用未闭合' };
+    }
 
     // ① 结构证据。这里只管"真的被切断的残块"：
     //    正文里解说 `<tool_call>` 这个标签（模型经常干）不该被当成半截调用，
