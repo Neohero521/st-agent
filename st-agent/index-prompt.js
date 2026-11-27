@@ -16,6 +16,44 @@ import { ADV_TOOLS, advToolByName, advToolsPrompt, helperInfo } from './adv-tool
 /* ------------------------------ 系统提示 ------------------------------ */
 
 const PRESET_CHAR_LIMIT = 6000;
+const CHAT_LINE_LIMIT = 600;
+
+/**
+ * 把酒馆「当前聊天」的最近几楼一起带上。
+ * 写卡器的做法：Agent 得知道用户现在正聊到哪，否则每次都要用户再把前情复述一遍。
+ * 只取最近的、只读不改——这里给的是"参考背景"，不是要 Agent 去续写对话。
+ */
+function chatContextBlock() {
+    if (settings.chatContext === false) return '';
+    try {
+        const c = ctx();
+        const chat = Array.isArray(c.chat) ? c.chat : [];
+        if (!chat.length) return '';
+        const turns = Math.max(2, Math.min(40, Number(settings.chatContextTurns) || 8));
+        const picked = [];
+        for (const m of chat.slice(-turns)) {
+            // 酒馆的系统消息（欢迎页那堆提示）里塞的是整段 HTML，进上下文纯属占地方
+            if (m?.is_system) continue;
+            const body = String(m?.mes ?? m?.content ?? '')
+                .replace(/<[^>]*>/g, ' ')
+                .replace(/[ \t\r\n]+/g, ' ')
+                .trim();
+            if (!body) continue;
+            const who = m?.is_user ? '用户' : (String(m?.name || '').trim() || '角色');
+            picked.push(`${who}: ${body.length > CHAT_LINE_LIMIT ? body.slice(0, CHAT_LINE_LIMIT) + '…' : body}`);
+        }
+        if (!picked.length) return '';
+        return `
+
+## 当前聊天上下文（最近 ${picked.length} 条）
+
+${picked.join(String.fromCharCode(10))}
+
+说明：这是酒馆里正在进行的对话，只作为背景让你知道"现在聊到哪"。除非用户明确要求，不要去改它、也不要把自己当成里面的角色继续往下写。`;
+    } catch {
+        return '';
+    }
+}
 
 /**
  * 每轮生成前读一次用户当前的 Chat Completion 预设。
@@ -49,8 +87,8 @@ function readPresetBlocks() {
         }
         if (!picked.length) return null;
 
-        let text = picked.join('\n\n');
-        if (text.length > PRESET_CHAR_LIMIT) text = text.slice(0, PRESET_CHAR_LIMIT) + '\n…（预设过长，已截断）';
+        let text = picked.join(String.fromCharCode(10, 10));
+        if (text.length > PRESET_CHAR_LIMIT) text = text.slice(0, PRESET_CHAR_LIMIT) + String.fromCharCode(10) + '…（预设过长，已截断）';
         try { text = c.substituteParams?.(text) || text; } catch { /* 宏展开失败就用原文 */ }
         return { name, text };
     } catch {
@@ -60,12 +98,13 @@ function readPresetBlocks() {
 
 export async function buildSystemPrompt() {
     const c = ctx();
+    const NL = String.fromCharCode(10);
     let env = [
         `- 当前角色: ${c.characters?.[c.characterId]?.name || '（无）'}（${c.characters?.[c.characterId]?.avatar || '-'}）`,
         `- 当前聊天: ${c.chatId || '（无）'}，消息数 ${c.chat?.length ?? 0}`,
         `- 角色卡总数: ${(c.characters || []).length}`,
         `- 世界书: ${(c.getWorldInfoNames?.() ?? []).join('、') || '（无）'}`,
-    ].join('\n');
+    ].join(NL);
 
     if (window.__staBridgeOnline) {
         try {
@@ -76,7 +115,7 @@ export async function buildSystemPrompt() {
                     '（额外：磁盘桥接已连接，可用 fs.* 与 exec）',
                     `- 酒馆根目录: ${info.data.stRoot}`,
                     `- 用户数据目录: ${info.data.userRoot || '(未识别)'}`,
-                ].join('\n');
+                ].join(NL);
             }
         } catch { /* ignore */ }
     }
@@ -96,7 +135,7 @@ ${preset.text}`
     return `你是 ST Agent，运行在 SillyTavern（酒馆）内部的自主 Agent。你通过酒馆自己的接口真实地增删改查酒馆数据：角色卡、世界书、聊天记录、设置、预设、正则、扩展，并能执行 STscript。
 
 当前环境：
-${env}
+${env}${chatContextBlock()}
 
 可用工具：
 ${toolsPrompt()}${advToolsPrompt()}
