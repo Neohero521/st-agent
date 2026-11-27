@@ -100,11 +100,24 @@ export function helperInfo() {
     return { online: true, version };
 }
 
-export function listScripts() {
+export function listScripts({ scope = 'global' } = {}) {
     const th = helper();
     if (!th?.getScriptTrees) throw new Error('需要安装「酒馆助手」(JS-Slash-Runner) 4.x');
-    const trees = th.getScriptTrees();
-    return { count: (trees || []).length, scripts: (trees || []).map(t => ({ name: t.name, type: t.type, enabled: t.enabled, id: t.id })) };
+    // JSR 4.12 的 getScriptTrees 必须带 {type}，不传返回 undefined（不是空数组），
+    // 旧实现直接 .map 就炸 TypeError: reading 'type'。
+    let trees;
+    try { trees = th.getScriptTrees({ type: scope }); } catch { trees = th.getScriptTrees(); }
+    const flat = [];
+    const walk = (arr) => (Array.isArray(arr) ? arr : []).forEach(t => {
+        if (t?.type === 'folder') {
+            flat.push({ name: t.name, type: 'folder', count: (t.scripts || []).length });
+            walk(t.scripts);
+        } else {
+            flat.push({ name: t.name, type: t.type || 'script', enabled: t.enabled, id: t.id });
+        }
+    });
+    walk(trees);
+    return { scope, count: flat.length, scripts: flat };
 }
 
 /**

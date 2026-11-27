@@ -65,8 +65,15 @@ export async function bridge(path, body = {}) {
 /* ------------------------------ 小工具 ------------------------------ */
 
 export function pickCharacter(name) {
-    const list = c().characters || [];
-    return list.find(x => x.avatar === name) || list.find(x => x.name === name) || null;
+    const ctx = c();
+    const list = ctx.characters || [];
+    const key = name === undefined || name === null || name === '' ? null : String(name);
+    // 不传名字时回退当前选中的角色，而不是返回 null 让上层报「未找到角色：undefined」
+    if (!key) return list[ctx.characterId] || null;
+    return list.find(x => x.avatar === key)
+        || list.find(x => x.avatar === `${key}.png`)
+        || list.find(x => x.name === key)
+        || null;
 }
 
 export function characterSummary(ch) {
