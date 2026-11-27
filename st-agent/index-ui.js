@@ -348,6 +348,22 @@ function clockOf(ts) {
 }
 
 /**
+ * 当前这份代码到底是从哪个目录加载的。
+ * 酒馆有两个第三方扩展目录：用户目录 data/<handle>/extensions/<名>（显示为 "名"），
+ * 以及全局目录 public/scripts/extensions/third-party/<名>（显示为 "third-party/名"）。
+ * 两处各放一份时，页面加载的可能不是你刚覆盖的那份——「改了但一直是旧版」多半就在这里。
+ */
+export function selfPath() {
+    try {
+        const u = new URL(import.meta.url);
+        const seg = u.pathname.split('/');
+        const i = seg.indexOf('extensions');
+        if (i >= 0) return seg.slice(i + 1).join('/');
+        return u.pathname;
+    } catch { return ''; }
+}
+
+/**
  * 自检：一行字把「版本 / 会话与条目 / 副本有没有在写 / 角色卡与世界书到底刷出来没有」摆清楚。
  * 手机端出问题时让用户念这一行，比来回猜十轮都快。
  */
@@ -383,6 +399,11 @@ export async function runSelfCheck(outEl) {
         const w = window;
         parts.push(`屏${w.innerWidth}x${w.innerHeight}`);
         if (w.matchMedia && w.matchMedia('(pointer: coarse)').matches) parts.push('触屏');
+    } catch { /* ignore */ }
+
+    try {
+        const p = selfPath();
+        if (p) parts.push(`路径 ${p.split('/').slice(0, -1).join('/') || p}`);
     } catch { /* ignore */ }
 
     const line = parts.join(' · ');
