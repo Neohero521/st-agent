@@ -100,6 +100,15 @@ export function buildPanel() {
                     <input class="sta-use-preset" type="checkbox" />
                 </label>
                 <label class="sta-field sta-switch">
+                    <span>带当前聊天</span>
+                    <input class="sta-chat-context" type="checkbox" />
+                </label>
+                <label class="sta-field">
+                    <span>带入最近几条</span>
+                    <input class="sta-chat-turns" type="number" min="2" max="40" step="1" />
+                    <span class="sta-field-tip">发送任务时，把酒馆里正在进行的对话（最近这么多楼）一起交给 Agent，它才知道现在聊到哪，不用你把前情再说一遍。</span>
+                </label>
+                <label class="sta-field sta-switch">
                     <span>计划先批准</span>
                     <input class="sta-plan-mode" type="checkbox" />
                 </label>
@@ -145,6 +154,8 @@ export function bindPanel(root) {
     const policy = root.querySelector('.sta-approval-policy');
     const streamMode = root.querySelector('.sta-stream-mode');
     const usePreset = root.querySelector('.sta-use-preset');
+    const chatContext = root.querySelector('.sta-chat-context');
+    const chatTurns = root.querySelector('.sta-chat-turns');
     const planMode = root.querySelector('.sta-plan-mode');
     const batchConfirm = root.querySelector('.sta-batch-confirm');
     const regTools = root.querySelector('.sta-register-tools');
@@ -155,7 +166,7 @@ export function bindPanel(root) {
     const newSess = root.querySelector('.sta-new-session');
     const sessCount = root.querySelector('.sta-sessions-count');
 
-    setCurrentView({ root, panel, log, input, send, stop, status, drawer, profileSel, maxSteps, maxTokens, policy, streamMode, planMode, batchConfirm, regTools, usePreset, sessionsBtn, sessPanel, sessionsList: sessList, sessClose, newSess, sessCount });
+    setCurrentView({ root, panel, log, input, send, stop, status, drawer, profileSel, maxSteps, maxTokens, policy, streamMode, planMode, batchConfirm, regTools, usePreset, chatContext, chatTurns, sessionsBtn, sessPanel, sessionsList: sessList, sessClose, newSess, sessCount });
 
     root.querySelector('.sta-fab').addEventListener('click', () => togglePanel(true));
     root.querySelector('.sta-close').addEventListener('click', () => togglePanel(false));
@@ -166,7 +177,7 @@ export function bindPanel(root) {
     root.querySelector('.sta-drawer-close').addEventListener('click', () => { drawer.hidden = true; });
 
     send.addEventListener('click', submitTask);
-    stop.addEventListener('click', () => abortController?.abort());
+    stop.addEventListener('click', () => { updateStatus('正在停止…'); abortController?.abort(); });
     input.addEventListener('keydown', e => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -196,6 +207,12 @@ export function bindPanel(root) {
     policy.addEventListener('change', () => { settings.approval = policy.value; saveSettings(); });
     streamMode.addEventListener('change', () => { settings.streamMode = streamMode.value; saveSettings(); });
     usePreset.addEventListener('change', () => { settings.usePreset = usePreset.checked; saveSettings(); });
+    chatContext.addEventListener('change', () => { settings.chatContext = chatContext.checked; saveSettings(); });
+    chatTurns.addEventListener('change', () => {
+        settings.chatContextTurns = Math.min(40, Math.max(2, Number(chatTurns.value) || 8));
+        saveSettings();
+        syncSettingsUI();
+    });
     planMode.addEventListener('change', () => { settings.planMode = planMode.checked; saveSettings(); });
     batchConfirm.addEventListener('change', () => { settings.batchConfirm = batchConfirm.checked; saveSettings(); });
     regTools.addEventListener('change', () => { settings.registerChatTools = regTools.checked; saveSettings(); registerChatTools(); });
