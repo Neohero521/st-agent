@@ -60,7 +60,7 @@ if ($WithBridge) {
         $content = Get-Content $Config -Raw
         if ($content -match 'enableServerPlugins:\s*false') {
             Copy-Item $Config "$Config.bak" -Force
-            $content = $content -replace 'enableServerPlugins: false', 'enableServerPlugins: true'
+            $content = $content -replace 'enableServerPlugins:\s*false', 'enableServerPlugins: true'
             Set-Content $Config $content -NoNewline
             Write-Host "OK 已在 config.yaml 开启 enableServerPlugins（原文件备份为 config.yaml.bak）"
         }
