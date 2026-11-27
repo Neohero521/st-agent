@@ -4,13 +4,28 @@ import { ctx, loadSettings, saveSettings, pingBridge, getProfiles, generateRawFn
 import { typewrite, MODEL_FIELD, buildChatPayload, streamChatCompletion } from './index-stream.js';
 import { buildSystemPrompt } from './index-prompt.js';
 import { parseToolCalls, repairJson, buildCall, extractFinal, sumChars, compactHistory, stepGenerate } from './index-loop.js';
-import { ensureActiveSession, historyForContext, appendTurn, flushSessions, renderSessionLog } from './index-sessions.js';
-import { HIGH_RISK_PATTERNS, RISK_META, riskOf, batchLines, executeTool, summarizeArgs, briefArgs } from './index-risk.js';
+import { ensureActiveSession, historyForContext, appendTurn, flushSessions, renderSessionList, renderSessionLog } from './index-sessions.js';
+import { HIGH_RISK_PATTERNS, RISK_META, riskOf, batchLines, executeTool, summarizeArgs, briefArgs, takeRefreshNote } from './index-risk.js';
 import { html, buildPanel, bindPanel } from './index-ui.js';
 import { buildMenuEntry, togglePanel, setBusy, updateStatus, addLog, addStreamingDraft } from './index-ui2.js';
 import { askPlan, askApprovalBatch, askApproval, submitTask, populateProfiles, syncSettingsUI } from './index-ui3.js';
 import { registerChatTools } from './index-tools.js';
 import { refreshBridgeState, initialize } from './index.js';
+
+/**
+ * 工具条目的落盘负载。
+ * 结果只留前 1400 字：重载后还能点开看关键输出，又不会把会话存储撑爆。
+ */
+function toolMeta(ok, brief, level, payload) {
+    try {
+        return JSON.stringify({
+            ok: !!ok,
+            brief: String(brief || '').slice(0, 60),
+            level: Number(level) || 1,
+            result: String(payload == null ? '' : payload).slice(0, 1400),
+        });
+    } catch { return ''; }
+}
 
 export async function runAgent(task) {
     if (running) return;
@@ -91,6 +106,7 @@ export async function runAgent(task) {
                 if (!approved) {
                     planRejects++;
                     addLog('error', '计划未获批准，本轮没有执行任何操作');
+                    appendTurn('assistant', '计划未获批准，本轮没有执行任何操作', 'error', '', { flush: false, render: false });
                     messages.push({
                         role: 'user',
                         content: '<tool_result name="plan" ok="false">用户拒绝了这份计划，本轮没有执行任何操作。请调整方案，或先问用户想怎么改。</tool_result>',
@@ -103,6 +119,7 @@ export async function runAgent(task) {
                 }
             } else if (planMatch) {
                 addLog('plan', planMatch[1].trim());
+                appendTurn('assistant', planMatch[1].trim(), 'plan', '', { flush: false, render: false });
             }
 
             if (abortController.signal.aborted) break;
@@ -153,29 +170,42 @@ export async function runAgent(task) {
                     payload = `执行失败：${error.message}`;
                 }
                 entry.setResult(payload, ok);
+                entry.setRefresh(takeRefreshNote());
                 // 动作摘要带上关键参数：刷新后光看"char.create"不知道建了哪张卡
                 const briefRaw = String(briefArgs(call.name, call.args) || '').replace(/\s+/g, ' ').trim();
                 const briefUsable = briefRaw && briefRaw !== '{}' && briefRaw !== '[]' && briefRaw !== '无参数';
                 const briefCut = briefUsable ? `(${briefRaw.slice(0, 40)})` : '';
                 turnOps.push(call.name + (ok ? '' : '✗') + briefCut);
+                // 动作也落盘：手机切后台被回收、回来重载时，这一行不会变成一条笼统摘要
+                appendTurn('assistant', call.name, 'tool', toolMeta(ok, briefUsable ? briefRaw.slice(0, 60) : '', level, payload), { flush: false, render: false });
                 messages.push({
                     role: 'user',
                     content: `<tool_result name="${call.name}" ok="${ok}">${String(payload).slice(0, 12000)}</tool_result>`,
                 });
             }
 
-            if (final) addLog('plan', `阶段性结论：${final}`);
+            if (final) {
+                addLog('plan', `阶段性结论：${final}`);
+                appendTurn('assistant', `阶段性结论：${final}`, 'plan', '', { flush: false, render: false });
+            }
             if (abortController.signal.aborted) break;
         }
-        if (steps >= settings.maxSteps) addLog('error', `已达到最大步数 ${settings.maxSteps}，任务可能未完成`);
+        if (steps >= settings.maxSteps) {
+            addLog('error', `已达到最大步数 ${settings.maxSteps}，任务可能未完成`);
+            appendTurn('assistant', `已达到最大步数 ${settings.maxSteps}，任务可能未完成`, 'error', '', { flush: false, render: false });
+        }
     } catch (error) {
-        if (!abortController?.signal?.aborted) addLog('error', `运行出错：${error.message}`);
+        if (!abortController?.signal?.aborted) {
+            addLog('error', `运行出错：${error.message}`);
+            appendTurn('assistant', `运行出错：${error.message}`, 'error', '', { flush: false, render: false });
+        }
     } finally {
         // 回写会话：只存「结论 + 动作摘要」，tool_result 不落库（重放时已失效，还会污染上下文）
         try {
             if (finalText) appendTurn('assistant', finalText, 'final');
             if (turnOps.length) appendTurn('assistant', turnOps.slice(0, 40).join('\n'), 'ops');
             flushSessions();
+            renderSessionList();
         } catch (error) {
             console.warn('[st-agent] 会话回写失败：', error && error.message);
         }
