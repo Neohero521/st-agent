@@ -14,7 +14,7 @@ export const DEFAULT_SETTINGS = {
     enabled: true,
     profileId: '',
     maxSteps: 20,
-    maxTokens: 4096,
+    maxTokens: 8192,   // 单次输出上限；写卡/长脚本体量下 4096 会半路被切，4096 时代常被截断
     approval: 'write', // auto | write | all
     registerChatTools: false,
     maxHistoryChars: 24000,
@@ -25,6 +25,7 @@ export const DEFAULT_SETTINGS = {
     streamMode: 'auto',   // auto | off：chat completion 后端逐字流式
     sessionLimit: 20,     // 最多保留多少个会话（超出按最后使用时间淘汰）
     sessionCharBudget: 1200000, // 会话总字符预算，超出后先压缩最旧会话
+    schemaVersion: 3,     // 设置迁移标记
 };
 
 export let settings = { ...DEFAULT_SETTINGS };
