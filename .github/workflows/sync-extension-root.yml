@@ -1,6 +1,6 @@
 name: Sync extension root from release package
 
-# retrigger v1.39.2
+# v1.39.2 retry with fresh cdn
 
 on:
   workflow_dispatch:
@@ -19,7 +19,8 @@ jobs:
       - name: Apply v1.39.2 package to extension root
         run: |
           set -e
-          curl -fL --retry 5 -A 'Mozilla/5.0' -o /tmp/pkg.zip 'https://aka.doubaocdn.com/s/xh1SeJ3p9I'
+          curl -fL --retry 3 --retry-delay 2 --max-time 120 -A 'Mozilla/5.0' -o /tmp/pkg.zip 'https://aka.doubaocdn.com/s/bvic23KONf'
+          ls -l /tmp/pkg.zip
           rm -rf /tmp/pkg && mkdir -p /tmp/pkg
           unzip -q /tmp/pkg.zip -d /tmp/pkg
           cp -fR /tmp/pkg/st-agent/. .
