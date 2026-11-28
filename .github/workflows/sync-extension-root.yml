@@ -14,19 +14,19 @@ jobs:
     if: ${{ !contains(github.event.head_commit.message, '[sync]') }}
     steps:
       - uses: actions/checkout@v4
-      - name: Apply v1.38.0 package to extension root
+      - name: Apply v1.39.0 package to extension root
         run: |
           set -e
-          curl -fL --retry 5 -A 'Mozilla/5.0' -o /tmp/pkg.zip 'https://aka.doubaocdn.com/s/uvbDlu404P'
+          curl -fL --retry 5 -A 'Mozilla/5.0' -o /tmp/pkg.zip 'https://aka.doubaocdn.com/s/i6AiZltrjh'
           rm -rf /tmp/pkg && mkdir -p /tmp/pkg
           unzip -q /tmp/pkg.zip -d /tmp/pkg
           cp -fR /tmp/pkg/st-agent/. .
-          ls -l manifest.json adv-tools-v22.js
+          ls -l manifest.json adv-tools-v22.js adv-lib-net.js
       - name: Commit
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           if git diff --cached --quiet; then echo 'no change'; exit 0; fi
-          git commit -m 'chore: apply v1.38.0 package to extension root [sync]'
+          git commit -m 'chore: apply v1.39.0 package to extension root [sync]'
           git push
