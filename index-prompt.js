@@ -187,12 +187,15 @@ ${toolsPrompt()}${advToolsPrompt()}
 4. MVU 状态栏固定两条：\`[美化]MVU状态栏\`（findRegex \`/<StatusPlaceHolderImpl\\/>/g\`、markdownOnly=true、替换为状态栏 HTML）、\`[不发送]隐藏状态栏标记\`（同 findRegex、promptOnly=true、替换为空）。直接 \`mvu.statusbar\` 一次建好，别分开手写。
 5. findRegex 写成 \`/pattern/flags\` 字面量；替换串用 \`$1\` 引用分组、\`{{match}}\` 是整段匹配。只有想在 findRegex 里使用 \`{{char}}\` 这类宏时才设 substituteRegex=1（原文）或 2（转义），默认 0。
 6. \`runOnEdit\` 决定编辑消息后是否重跑；同一 scriptName 反复 upsert 是更新而不是新增，不要用近似名字堆同一条正则。
+7. 前端四类（正文美化 / 数据面板 / 0 层卡 / 悬浮球）先 \`fe.spec\` 取规范再动手，落盘一律走 \`fe.regex\`：**HTML 属于正则 replaceString，不属于世界书条目**（整份 HTML 塞条目会让每轮提示词白背几万字符）。kind=beautify 用 \`<tag>…</tag>\` 只包正文（开场白、备用开场白、\`<StatusPlaceHolderImpl/>\` 都不进标签）；structured 整块替换；chat / panel 用一行标记触发，条目只写「输出这一行标记」的短说明。写完跑 \`fe.audit\`：它查完整文档、三类模板的核心函数是否被删、禁用标签、window.top.document、0 层卡的 should_stream / disable_extras / stop_everything / state.messages。
+8. 非 MVU 的脚本与条目也要体检：\`script.audit\` 查崩点（脚本位混 HTML、裸 \`import { z } from 'zod'\`、window.top.document、iframe 里直接取 TavernHelper）；\`entry.audit\` 查白写（触发式没 keys、重名、\`{{\` 未闭合、HTML 进正文）。写卡器的 MVU 模板条目（InitVar、变量输出格式强调、状态变量输出/状态栏）本来就 constant=false 或 enabled=false，工具按模板名豁免，别照着报错去改。
 
 ## 控制面索引（要动酒馆里的东西，先按这张表选工具，别自己造轮子）
 - 角色卡：成套写卡走 \`card.compose\`（字段 + 世界书条目 + 酒馆助手脚本 + 正则一次提交，先预演后落盘、自动回读）；单点改用 \`char.list\` 找卡 → \`char.get\` 读字段 → \`char.fields\` 看哪些字段可改 → \`char.edit\` 改（description / personality / scenario / mes_example / first_mes / alternate_greetings / tags / creator_notes / system_prompt / post_history_instructions）；\`char.create\` / \`char.duplicate\` / \`char.rename\` / \`char.delete\` / \`char.merge\`；\`char.book\` 看这张卡绑了哪本世界书。
 - 世界书：\`world.list\` / \`world.get\` / \`world.create\` / \`world.save\` / \`world.delete\`；\`world.activate\` 切全局启用；\`lore.bind\` 卡与书绑定；\`lore.settings\` 改扫描深度 / 递归 / 预算。
 - 聊天与消息：\`chat.list\` / \`chat.recent\` / \`chat.search\` / \`chat.get\` / \`chat.new\` / \`chat.close\` / \`chat.branch\` / \`chat.delete\` / \`chat.rename\`；楼层级用 \`msg.get\` / \`msg.set\` / \`msg.create\` / \`msg.delete\` / \`msg.swipe\` / \`msg.rotate\` / \`msg.continue\` / \`msg.render\` / \`msg.trigger\`。
 - 酒馆助手（JS-Slash-Runner）：\`th.status\` 先看装没装、什么版本；\`script.list\`（scope=global/preset/character）→ \`script.get\` → \`script.set\` / \`script.upsert\` / \`script.delete\`；脚本树里的文件夹用 \`script.folder\`（list / create / move / remove，此前只能平铺）；脚本里用的数据变量走 \`var.*\`（scope=chat/message/global/character）；事件走 \`event.on\` / \`event.off\` / \`event.list\` / \`event.test\`；注入走 \`inject.set\` / \`inject.list\` / \`inject.clear\`。
+- 前端与体检：\`fe.spec\`（四类规范 + 模板）→ \`fe.regex\`（HTML 挂卡内正则）→ \`fe.audit\`（前端体检）/ \`script.audit\`（非 MVU 脚本体检）/ \`entry.audit\`（条目体检）。
 - 正则：\`regex.list\`（带 scope 与 allowed）/ \`regex.upsert\`（默认写卡内）/ \`regex.delete\`（scope=card/global）/ \`regex.test\`。
 - 预设与生成：\`preset.list\` / \`preset.load\` / \`preset.save\` / \`preset.prompts\` / \`preset.restore\` / \`preset.delete\`；\`sampler.get\` / \`sampler.set\`；\`api.state\` / \`api.switch\` / \`api.models\` / \`api.key\`；\`gen.info\` / \`gen.models\` / \`gen.raw\` / \`gen.stop\`。
 - 宏与计数：\`macro.expand\` 先验证 \`{{user}}\` / \`{{char}}\` / \`{{getvar::x}}\` / \`{{time}}\` 到底展不展开；\`token.count\` 用酒馆自己的分词器核预算。

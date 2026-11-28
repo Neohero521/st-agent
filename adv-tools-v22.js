@@ -19,6 +19,8 @@ import { normalizeEntryComment, entryTemplate, normalizeEntryContent, wcInitVarY
 import { WC_STATUS_TEMPLATE, mockScript, ensureHtmlDoc, injectMock, parseInitVarYaml } from './adv-lib-mvu-preview.js';
 import { FE_CHAT_BASE_HTML, feChatHtml } from './adv-lib-fe-template.js';
 import { editText, editPreview } from './adv-lib-str-edit.js';
+import { FE_SPEC, STATUSBAR_SPEC, SCRIPT_SPEC, ENTRY_SPEC, auditFrontend, auditStatusbar, auditScript, auditEntryList } from './adv-lib-spec-audit.js';
+import { FE_BEAUTIFY_BASE_HTML, FE_STRUCTURED_BASE_HTML } from './adv-lib-fe-template.js';
 import { listSpill, readSpill, setTodos, listSessionsBrief, snapshotSession, usageOf } from './index-sessions.js';
 import { getGoal, changeGoal } from './index-goal.js';
 
@@ -875,11 +877,36 @@ export const TOOLS = [
         run: async a => {
             const html = feChatHtml({ title: a.title, char: a.char });
             const n = Math.max(200, Math.min(2000, Number(a.preview_chars) || 600));
+            const mode = String(a.mode || 'regex').toLowerCase();
             let written = null;
-            if (a.book) {
+            if (a.book || mode === 'regex') {
                 const comment = normalizeEntryComment(String(a.comment || '[前端]聊天界面')) || '[前端]聊天界面';
-                const out = await writeEntry(a.book, comment, html, { position: 0, depth: 0, order: 240, constant: true, enabled: true });
-                written = { book: a.book, comment, uid: out.uid };
+                if (mode === 'regex') {
+                    // 写卡器规范：HTML 挂卡内正则，条目只放输出格式说明
+                    const marker = String(a.marker || 'ST_AGENT_CHAT_UI');
+                    const reg = await upsertScoped(charBy(a.card || c().characterId), {
+                        id: `st-agent-fe-chat-${marker.toLowerCase()}`,
+                        scriptName: '[界面]聊天界面',
+                        findRegex: `/${marker}/gm`,
+                        replaceString: wrapHtml(html),
+                        placement: [2],
+                        markdownOnly: true,
+                        promptOnly: false,
+                        runOnEdit: true,
+                        disabled: false,
+                    });
+                    written = { scope: 'scoped', regex: '[界面]聊天界面', id: reg.item && reg.item.id, marker, opened: reg.opened };
+                    if (a.book) {
+                        const out = await writeEntry(a.book, comment,
+                            `---\n聊天界面输出标记:\n  rule: 每轮回复只输出一行 ${marker}，不要输出其他正文（对话在界面内进行）\n  format: ${marker}`,
+                            { position: 0, depth: 0, order: 240, constant: true, enabled: true });
+                        written.entry = { book: a.book, comment, uid: out.uid };
+                    }
+                } else {
+                    if (!a.book) throw new Error('mode=entry 需要 book');
+                    const out = await writeEntry(a.book, comment, html, { position: 0, depth: 0, order: 240, constant: true, enabled: true });
+                    written = { scope: 'entry', book: a.book, comment, uid: out.uid, warn: 'HTML 写在条目正文会每轮占几万 token，写卡器的做法是 fe.regex' };
+                }
             }
             return {
                 ok: true,
@@ -889,8 +916,90 @@ export const TOOLS = [
                 skeleton: ['callParentApi', 'sendMessage', 'renderMessage', 'state.messages', 'should_stream', 'stop_everything'].filter(k => html.indexOf(k) >= 0),
                 preview: html.slice(0, n),
                 note: written
-                    ? '整份已落盘到世界书；前端注入方式：createScriptIdIframe() 或 iframe srcdoc 指向该条目内容'
-                    : '传 book 才会落盘；现在是预览片段，需要整份就带 book 再调一次',
+                    ? (written.scope === 'scoped'
+                        ? 'HTML 已挂成卡内正则（markdownOnly + placement[2] + runOnEdit）；条目只写了输出标记，符合写卡器规范。改样式请用 fe.regex 重写或 regex.edit 局部改'
+                        : '整份 HTML 落到了世界书条目：token 代价高，建议改用默认 mode=regex')
+                    : '现在是预览片段；传 card 自动写卡内正则，传 book+mode=entry 才写条目',
+            };
+        },
+    },
+    {
+        name: 'fe.regex',
+        kind: 'write',
+        desc: '按写卡器规范给前端落盘：HTML 挂成卡内正则（markdownOnly + placement=[2] + runOnEdit），而不是塞进世界书条目。kind=beautify 用 <标签>…</标签> 包正文；structured 同标签但整块替换；chat / panel 用一行标记（如 ^ST_AGENT_CHAT_UI$）触发。html 不传就用对应标准模板。传 book 时额外写一条短小的输出格式条目。返回正则配置预览 + 体检结果。',
+        params: {
+            kind: 'string 必填，beautify / structured / chat / panel',
+            card: 'string 可选，头像文件名（默认当前角色）',
+            name: 'string 可选，正则名（默认按 kind 取，如「[界面]正文美化」）',
+            tag: 'string 可选，标签名（beautify/structured 必填或给默认 panel）',
+            marker: 'string 可选，chat/panel 的标记词（默认 ST_AGENT_CHAT_UI / ST_AGENT_PANEL_UI）',
+            html: 'string 可选，HTML 全文；不传用模板',
+            book: 'string 可选，同时写输出格式条目到这个世界书',
+            dry_run: 'boolean 可选，只看配置不写卡',
+        },
+        run: async a => {
+            const kind = String(a.kind || '').toLowerCase();
+            if (!['beautify', 'structured', 'chat', 'panel'].includes(kind)) throw new Error('kind 只能是 beautify / structured / chat / panel');
+            const ch = charBy(a.card || c().characterId);
+            if (!ch) throw new Error('没有目标角色卡');
+            const tag = String(a.tag || (kind === 'beautify' ? 'body' : 'panel')).replace(/[^a-zA-Z0-9_-]/g, '') || 'panel';
+            const marker = String(a.marker || (kind === 'chat' ? 'ST_AGENT_CHAT_UI' : 'ST_AGENT_PANEL_UI'));
+            const defName = { beautify: '[界面]正文美化', structured: '[界面]' + (a.name || '数据面板'), chat: '[界面]聊天界面', panel: '[界面]' + (a.name || '独立面板') }[kind];
+            const name = String(a.name || defName);
+            let html = String(a.html || '');
+            if (!html) {
+                if (kind === 'beautify') html = FE_BEAUTIFY_BASE_HTML;
+                else if (kind === 'structured' || kind === 'panel') html = FE_STRUCTURED_BASE_HTML;
+                else html = feChatHtml({ title: '聊天界面' });
+            }
+            const findRegex = (kind === 'beautify')
+                ? `/<${tag}>([\\s\\S]*?)<\\/${tag}>/g`
+                : (kind === 'structured')
+                    ? `/<${tag}>[\\s\\S]*?<\\/${tag}>/gsi`
+                    : `/${marker}/g`;
+            const config = {
+                id: `st-agent-fe-${kind}`,
+                scriptName: name,
+                findRegex,
+                replaceString: wrapHtml(html),
+                placement: [2],
+                markdownOnly: true,
+                promptOnly: false,
+                runOnEdit: true,
+                disabled: false,
+            };
+            const audit = auditFrontend(html, kind === 'panel' ? 'structured' : kind);
+            if (a.dry_run) {
+                return { ok: true, dry_run: true, kind, card: ch.avatar, config: { ...config, replaceString: config.replaceString.slice(0, 200) + '…' }, bytes: html.length, audit };
+            }
+            if (audit.problems.length) {
+                // 有硬伤就不落盘，避免把坏模板推进真机
+                return { ok: false, kind, blocked: '前端体检未过，先按 fixes 改完再写', audit, config_preview: { findRegex, scriptName: name } };
+            }
+            const reg = await upsertScoped(ch, config);
+            let entry = null;
+            if (a.book) {
+                const fmtText = (kind === 'beautify')
+                    ? `---\n正文格式:\n  rule: 每轮正文用 <${tag}> 和 </${tag}> 包住；标签内只放剧情正文，不含状态栏占位符、不含变量块\n  format: <${tag}>正文</${tag}>`
+                    : (kind === 'structured')
+                        ? `---\n面板数据格式:\n  rule: 每轮输出一个 <${tag}> 数据块（每行 key: value），不要用自然语言代替\n  format: <${tag}>…</${tag}>`
+                        : `---\n界面标记:\n  rule: 每轮只输出一行 ${marker}，不要输出其他正文（交互在界面内进行）\n  format: ${marker}`;
+                const out = await writeEntry(a.book, String(a.entry || name).replace(/^\[界面\]/, '[前端]'), fmtText,
+                    { position: 0, depth: 0, order: 240, constant: true, enabled: true });
+                entry = { book: a.book, comment: String(a.entry || name), uid: out.uid };
+            }
+            // 回读：确认正则真的在卡里且开关是开的
+            const after = scopedScripts(charBy(ch.avatar));
+            const hit = after.find(r => r && (r.id === config.id || r.scriptName === name));
+            return {
+                ok: !!hit,
+                kind, card: ch.avatar, bytes: html.length,
+                regex: hit ? { id: hit.id, name: hit.scriptName, findRegex: hit.findRegex, markdownOnly: hit.markdownOnly, placement: hit.placement, runOnEdit: hit.runOnEdit } : null,
+                regex_total: after.length, opened: reg.opened,
+                entry, audit,
+                note: hit
+                    ? '已落盘并回读。刷新聊天后 AI 下次输出标签/标记时生效；改样式用 regex.edit 局部改 replaceString'
+                    : '回读没找到这条正则，检查卡的正则开关或重试',
             };
         },
     },
@@ -1009,6 +1118,108 @@ export const TOOLS = [
             if (a.dry_run) return { ok: true, dry_run: true, book: a.book, uid: hit.uid, comment: hit.comment, replacements: res.replacements, preview };
             const out = await setEntry({ name: a.book, uid: hit.uid, comment: hit.comment, content: res.content });
             return { ok: true, book: a.book, uid: out.uid, comment: hit.comment, replacements: res.replacements, bytes: res.content.length, preview };
+        },
+    },
+    {
+        name: 'fe.spec',
+        kind: 'read',
+        desc: '前端/状态栏/脚本/条目四类「正确写法」规范（结构化返回，不是长文）。kind=beautify|structured|chat|floating 给单类，all 给总览：每类带上正则配置、必须保留的核心函数、真实踩过的坑（标签只包正文、0层卡静默生成参数、悬浮球禁止 window.top.document 等）。embed=true 时附正文美化/结构化数据两份标准模板原文（chat 模板太大，用 fe.chat 取）。写之前先读它，比事后返工便宜。',
+        params: {
+            kind: 'string 可选，beautify / structured / chat / floating / statusbar / script / entry / all（默认 all）',
+            embed: 'boolean 可选，附模板原文（只对 beautify/structured 生效）',
+        },
+        run: async a => {
+            const k = String(a.kind || 'all').toLowerCase();
+            const out = { ok: true, kind: k };
+            if (k === 'all' || k === 'frontend') out.frontend = FE_SPEC;
+            if (k === 'all' || k === 'statusbar') out.statusbar = STATUSBAR_SPEC;
+            if (k === 'all' || k === 'script') out.script = SCRIPT_SPEC;
+            if (k === 'all' || k === 'entry') out.entry = ENTRY_SPEC;
+            if (FE_SPEC.kinds[k]) out[k] = FE_SPEC.kinds[k];
+            if (a.embed) {
+                if (k === 'beautify' || k === 'all') out.template_beautify = FE_BEAUTIFY_BASE_HTML;
+                if (k === 'structured' || k === 'all') out.template_structured = FE_STRUCTURED_BASE_HTML;
+            }
+            if (k === 'chat' && a.embed) out.note = '0 层卡模板 47KB，用 fe.chat 取（它会顺带写进世界书）';
+            return out;
+        },
+    },
+    {
+        name: 'fe.audit',
+        kind: 'read',
+        desc: '前端 HTML 体检：查完整文档、核心函数是否被删、禁用标签、window.top.document、0层卡静默生成参数、正文美化/结构化各自的必需函数。html 不给就取卡里对应正则的 replaceString（正则名匹配「正文美化」/「面板」，或按 regex_id 指定）。返回 problems + fixes + notes，只读不写。',
+        params: {
+            kind: 'string 可选，beautify / structured / chat / floating（默认 chat）',
+            html: 'string 可选，直接给 HTML',
+            card: 'string 可选，头像文件名（从卡里正则取）',
+            regex_id: 'string 可选，指定正则 id',
+            regex_name: 'string 可选，按正则名包含匹配',
+        },
+        run: async a => {
+            const kind = String(a.kind || 'chat').toLowerCase();
+            let html = String(a.html || '');
+            let source = 'html 参数';
+            if (!html) {
+                const rs = scopedScripts(charBy(a.card || c().characterId));
+                let hit = null;
+                if (a.regex_id) hit = rs.find(r => r && r.id === a.regex_id);
+                if (!hit && a.regex_name) hit = rs.find(r => r && String(r.scriptName || '').indexOf(a.regex_name) >= 0);
+                if (!hit) hit = rs.find(r => r && r.markdownOnly && !r.promptOnly && String(r.findRegex || '').indexOf('StatusPlaceHolder') < 0);
+                if (hit) { html = String(hit.replaceString || ''); source = `卡内正则「${hit.scriptName || hit.id}」`; }
+            }
+            const r = auditFrontend(html, kind);
+            return Object.assign({ source }, r);
+        },
+    },
+    {
+        name: 'script.audit',
+        kind: 'read',
+        desc: '非 MVU 脚本体检：脚本位里混 HTML、裸 import z、window.top.document、把轮询当事件、iframe 里直接拿 TavernHelper 等崩点逐条查。给 card + id/name 读卡内脚本，或直接给 content。返回 problems + fixes + notes。',
+        params: {
+            card: 'string 可选，头像文件名（默认当前角色）',
+            id: 'string 可选，脚本 id',
+            name: 'string 可选，脚本名（包含匹配）',
+            content: 'string 可选，直接给脚本文本',
+        },
+        run: async a => {
+            let content = String(a.content || '');
+            let source = 'content 参数';
+            let name = a.name || '';
+            if (!content) {
+                const scripts = ((charBy(a.card || c().characterId)?.data.extensions || {}).tavern_helper || {}).scripts || [];
+                let hit = null;
+                if (a.id) hit = scripts.find(x => x && x.id === a.id);
+                if (!hit && a.name) hit = scripts.find(x => x && String(x.name || '').indexOf(a.name) >= 0);
+                if (!hit) throw new Error('没给 content，也没在卡里找到对应脚本（传 id/name）');
+                content = String(hit.content || '');
+                name = hit.name || '';
+                source = `卡内脚本「${name}」`;
+            }
+            const r = auditScript(content, name);
+            return Object.assign({ source, name }, r);
+        },
+    },
+    {
+        name: 'entry.audit',
+        kind: 'read',
+        desc: '世界书条目体检（非 MVU 条目同样适用）：触发式没 keys=白写、常驻挂 keys、常驻被禁用、重名、正文混 HTML、{{…}} 未闭合、position/depth 语义错配。给 comment/uid 查单条，或 all=true 查整本。返回 problems + fixes + notes。',
+        params: {
+            book: 'string 必填，世界书名',
+            comment: 'string 可选，条目名（包含匹配）',
+            uid: 'number 可选，条目 uid',
+            all: 'boolean 可选，整本体检',
+        },
+        run: async a => {
+            if (!a.book) throw new Error('entry.audit 需要 book');
+            const got = await getEntries({ name: a.book, limit: 500 });
+            let list = got.entries || [];
+            if (!a.all) {
+                if (a.uid !== undefined && a.uid !== null && a.uid !== '') list = list.filter(e => Number(e.uid) === Number(a.uid));
+                else if (a.comment) list = list.filter(e => String(e.comment || '').indexOf(a.comment) >= 0);
+                else list = list.slice(0, 12);
+            }
+            const r = auditEntryList(list);
+            return Object.assign({ book: a.book, scoped: !a.all }, r);
         },
     },
     {
