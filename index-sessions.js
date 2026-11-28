@@ -132,7 +132,7 @@ function sessionTokens(s) {
  * 表现为「刚才还列着三步，回来全没了」。v1.22 修。
  */
 const EXTRA_FIELDS = ['todos', 'goal', 'goalSeq', 'goalTombstone', 'plan',
-    'checkpoint', 'compactedAt', 'compactCount', 'checkpointBy', 'spill', 'spillSeq'];
+    'checkpoint', 'compactedAt', 'compactCount', 'checkpointBy', 'spill', 'spillSeq', 'team'];
 
 function pickExtras(source) {
     const out = {};

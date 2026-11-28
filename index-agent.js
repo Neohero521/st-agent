@@ -8,6 +8,7 @@ import { ensureActiveSession, historyForContext, appendTurn, flushSessions, rend
 import { resetRepeat, noteRepeat, toolTimeoutMs, withTimeout } from './index-guard.js';
 import { goalShouldContinue, noteGoalRound, getGoal } from './index-goal.js';
 import { planStatusLine } from './index-plan.js';
+import { teamBrief } from './index-team.js';
 import { HIGH_RISK_PATTERNS, RISK_META, riskOf, batchLines, executeTool, summarizeArgs, briefArgs, takeRefreshNote } from './index-risk.js';
 import { html, buildPanel, bindPanel } from './index-ui.js';
 import { buildMenuEntry, togglePanel, setBusy, updateStatus, addLog, addStreamingDraft } from './index-ui2.js';
@@ -61,6 +62,12 @@ function taskStateBlock(session, startedAt = Date.now()) {
         lines.push('', '## 当前目标（goal）');
         lines.push(`- ${goal.objective}`);
         lines.push(`- phase=${goal.phase}｜第 ${goal.roundsStarted}/${goal.maxGoalRounds} 轮${goal.blocker ? `｜blocker=${goal.blocker.code}${goal.blocker.note ? '（' + goal.blocker.note + '）' : ''}` : ''}`);
+    }
+    const teamLine = teamBrief(session);
+    if (teamLine) {
+        lines.push('', '## 共享任务板');
+        lines.push(`- ${teamLine}`);
+        lines.push('- 开工前先 team.task.list 看就绪项，改状态带 revision（CAS）；任务就绪不会自己唤醒谁，该派就 sub.spawn。');
     }
     const planLine = planStatusLine();
     if (planLine) {

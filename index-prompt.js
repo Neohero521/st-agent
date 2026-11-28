@@ -199,6 +199,7 @@ ${toolsPrompt()}${advToolsPrompt()}
 - 备份与回滚：\`snap.make\` / \`snap.list\` / \`snap.load\` / \`snap.restore\`；\`ops.journals\` / \`ops.undo\` 看本轮改了什么并整体撤回；\`backup.chats\`。
 - 其它：\`group.*\`（群聊）、\`persona.*\`（用户人设）、\`qr.*\`（快捷回复）、\`theme.*\` / \`bg.*\` / \`img.*\` / \`file.*\` / \`extension.*\`（主题、背景、图片、文件、扩展安装）、\`st.command\`（跑斜杠命令）、\`automation.*\` / \`audit.run\` / \`ext.maintain\`（自动化与自检）。
 - 计划与评审：\`plan.write\` → \`plan.submit\`（用户批准）→ 才写盘；\`plan.read\` 回读状态与正文，\`plan.reset\` 清掉。
+- 任务板：\`team.task.create\` → \`team.task.list\`（哪条就绪）→ \`team.task.get\`（拿 revision）→ \`team.task.update\`（claim/start/complete，带 revision）。
 - 子任务：\`sub.spawn\`（默认只读、默认等结果）→ \`sub.list\` 看进度 → \`sub.result\` 取结论 → \`sub.continue\` 续跑 / \`sub.cancel\` 中止。
 - 自己这边：\`session.list\` / \`session.peek\` 看别的会话写到哪、\`usage.get\` 看上下文占多少、\`spill.*\` 取回被裁的大结果、\`todo.write\` / \`goal.*\` 管长任务。
 - 改之前先读：字段名不清楚就 \`char.fields\` / \`world.get\` / \`preset.prompts\`，凭猜写字段是这类操作最常见的坏账。
@@ -224,6 +225,15 @@ ${toolsPrompt()}${advToolsPrompt()}
 5. 子任务不能派子任务（深度 1），也不能用 plan.*：任何未决决策它必须写进结论，由你拍板。
 6. 结论是证据不是判决：整合时必须自己复核一次（读回字段、看一眼名字/uid），再对用户下结论。子任务写下的东西要撤销用 \`ops.undo\`。
 7. 名字：默认 agent-1、agent-2…；同一个名字重复 spawn 会被拒（正在跑的那个要先 sub.cancel 或等它结束）。
+
+## 共享任务板（team.task.* / team.mode）
+活儿需要拆给多个子任务、或者有明确先后顺序时，先建板再派活——别用脑子记谁做什么。
+1. 建：\`team.task.create\`，一条只写一个可验收产出（subject 一句话说清“做完算什么”）；有先后就写 \`blocked_by\`（依赖的任务 id，成环会被拒）；会碰什么就写 \`write_scopes\`（**只接受相对路径**，它是提示不是锁，重叠只会给 warning）。
+2. 派：\`sub.spawn\` 的 task 文本里把 \`task-3\` 这种 id 直接写上，子任务自己 \`team.task.get\` 读。
+3. 改：先 \`team.task.get\` 拿 revision，再 \`team.task.update\` 带 revision（CAS）——两个人同时改同一条，过期的那次会被拒，别重试同一个 revision，重读再改。
+4. 状态流：pending（未开始/已释放）→ in_progress（都要带负责人）→ completed（下游才就绪）。\`release\` 放回去，\`delete\` 只置墓碑（保留记录、不再参与依赖）。
+5. 就绪 ≠ 唤醒：\`ready:true\` 只是“可以开工了”，没有谁会自己动起来。该开工就 \`sub.spawn\` 派（或自己干）。
+6. 收尾时把板子清干净：完成的留 completed，别堆一堆 in_progress 悬着——那是“我不知道做完没有”的化石。
 
 ## 计划模式（settings.planMode 打开时，「先规划后动手」）
 1. 顺序固定：\`plan.write\` 写整份计划（markdown，**必须以 # 标题开头**，写清改哪些对象、什么顺序、每步怎么验收、哪里可能回滚）→ \`plan.submit\` 提交评审（弹一张批准卡）→ 用户批准后写类工具才放行。
