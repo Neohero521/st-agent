@@ -64,6 +64,28 @@ async function charMerge({ avatar, fields, unset, name } = {}) {
     if (Object.keys(payload).length <= 1 && !name) throw new Error('没有要写入的字段（用 fields 或 unset）');
 
     const res = await postJson('/api/characters/merge-attributes', payload);
+    // v1.30：手机上 merge-attributes 可能被反代/CSRF 直接 403；此时改走 edit-attribute 逐字段写
+    // （ST 原生端点，body 只有 avatar_url / ch_name / field / value，权限面最小）
+    if (res.status === 403) {
+        const card = (c().characters || []).find(x => x.avatar === av);
+        const chName = card?.name || String(av).replace(/\.png$/i, '');
+        const written = [];
+        for (const [k, v] of Object.entries(fields || {})) {
+            if (v === UNSET) continue;
+            const r2 = await postJson('/api/characters/edit-attribute', {
+                avatar_url: av, ch_name: chName, field: k, value: v,
+            });
+            if (!r2.ok) throw new Error(`改字段 ${k} 失败：HTTP ${r2.status}`);
+            written.push(k);
+        }
+        if (card) {
+            Object.assign(card, fields);
+            card.data = card.data || {};
+            Object.assign(card.data, fields);
+        }
+        c().saveSettingsDebounced?.();
+        return { ok: true, avatar: av, written, via: 'edit-attribute' };
+    }
     if (res.status === 400) {
         let detail = '';
         try { const j = await res.json(); detail = j?.error || j?.message || ''; } catch { /* ignore */ }

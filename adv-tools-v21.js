@@ -122,18 +122,11 @@ async function activateWorld({ name, scope = 'chat', value = true, char } = {}) 
     if (scope === 'character') {
         const target = await characterBy({ name: charName });
         if (!target) throw new Error(`未找到角色：${charName || '（当前）'}`);
-        const res = await fetch('/api/characters/merge-attributes', {
-            method: 'POST',
-            headers: c().getRequestHeaders(),
-            body: JSON.stringify({
-                avatar: target.avatar,
-                data: { extensions: { world: value ? name : '' } },
-            }),
+        // v1.30：绑定世界书也走统一写入通道（旧 merge 通道手机上会 403）
+        await writeCardExtensions(target.avatar, ext => {
+            ext.world = value ? name : '';
+            return ext;
         });
-        if (!res.ok) {
-            const j = await res.json().catch(() => ({}));
-            throw new Error(j.message || `合并角色卡失败 HTTP ${res.status}`);
-        }
         // 与官方 world-info.js 同款收尾：merge 只改了磁盘，浏览器内存还是旧卡，
         // 不重新拉一次，用户在当前会话里会一直看到旧绑定、以为没写进去。
         if (typeof ctx.getOneCharacter === 'function') {

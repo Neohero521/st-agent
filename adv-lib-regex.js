@@ -1,4 +1,5 @@
 import { getContext } from '../../../extensions.js';
+import { writeCardExtensions } from './adv-lib-card.js';
 
 /**
  * 角色卡「正则位」（scoped regex）读写。
@@ -77,13 +78,13 @@ export async function saveScoped(ch, list) {
         } catch { /* 卡本身不是合法 JSON 就跳过，不阻断 */ }
     }
 
-    const res = await fetch('/api/characters/merge-attributes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ avatar: ch.avatar, data: { extensions: { regex_scripts: list } } }),
+    // v1.30：改走统一写入通道（edit-attribute → merge-attributes → TavernHelper），
+    // 与写卡器「写入酒馆」同一条链路；旧实现手写 header 不带 CSRF，手机上直接 403。
+    const r = await writeCardExtensions(ch.avatar, ext => {
+        ext.regex_scripts = list;
+        return ext;
     });
-    if (!res.ok) throw new Error(`写入角色卡正则位失败：HTTP ${res.status}`);
-    return { avatar: ch.avatar, total: list.length };
+    return { avatar: ch.avatar, total: list.length, channel: r.channel, tried: r.tried };
 }
 
 /**

@@ -2,6 +2,7 @@ import { getContext } from '../../../extensions.js';
 import { CATALOG, reg } from './v20-catalog-a.js';
 import { planOps } from './v20-plan.js';
 import { opsApply } from './v20-apply.js';
+import { writeCardExtensions } from './adv-lib-card.js';
 
 /**
  * 成套写卡（write kit）
@@ -407,18 +408,15 @@ export const TOOLS = [
                 throw new Error(`action 只能是 list / create / move / remove，收到 ${action}`);
             }
 
-            const variables = card?.data?.extensions?.tavern_helper?.variables || {};
-            const nested = { extensions: { tavern_helper: { scripts: tree, variables } } };
-            const payload = { avatar: card.avatar, data: Object.assign({}, card.data, nested), extensions: nested.extensions };
-            const res = await fetch('/api/characters/merge-attributes', {
-                method: 'POST',
-                headers: c().getRequestHeaders(),
-                body: JSON.stringify(payload),
+            // v1.30：与 script.upsert 同一条通道（edit-attribute → merge → TavernHelper）
+            const w = await writeCardExtensions(card.avatar, ext => {
+                const th = (ext.tavern_helper = ext.tavern_helper || {});
+                th.scripts = tree;
+                if (!th.variables || typeof th.variables !== 'object') th.variables = {};
+                return ext;
             });
-            if (!res.ok) throw new Error(`写脚本树失败：HTTP ${res.status}`);
-            Object.assign(card, { data: Object.assign({}, card.data, nested), extensions: nested.extensions });
             c().saveSettingsDebounced?.();
-            return { ok: true, action, tree: layout(), scripts: flatten(tree).length };
+            return { ok: true, action, tree: layout(), scripts: flatten(tree).length, channel: w.channel };
         },
     },
     {

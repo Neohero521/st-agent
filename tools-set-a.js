@@ -1,4 +1,5 @@
 import { c, api, apiGet, apiForm, bridge, pickCharacter, characterSummary, getSettingByPath, refreshCharacters } from './tools-lib.js';
+import { writeCardExtensions } from './adv-lib-card.js';
 
 export const ST_TOOLS_A = [
     {
@@ -173,6 +174,28 @@ export const ST_TOOLS_A = [
                 headers: c().getRequestHeaders(),
                 body: JSON.stringify({ avatar: ch.avatar, ...patch, data: dataPatch }),
             });
+            if (res.status === 403) {
+                // v1.30：merge-attributes 被拒（反代/CSRF）→ edit-attribute 逐字段 + 统一 extensions 通道
+                const done = [];
+                const chName = ch.name || String(ch.avatar).replace(/\.png$/i, '');
+                const top = Object.keys(patch).filter(k => k !== 'data');
+                for (const k of top) {
+                    if (patch[k] === undefined) continue;
+                    const r2 = await fetch('/api/characters/edit-attribute', {
+                        method: 'POST',
+                        headers: c().getRequestHeaders(),
+                        body: JSON.stringify({ avatar_url: ch.avatar, ch_name: chName, field: k, value: patch[k] }),
+                    });
+                    if (!r2.ok) throw new Error(`改字段 ${k} 失败：HTTP ${r2.status}`);
+                    done.push(k);
+                }
+                if (dataPatch.extensions && typeof dataPatch.extensions === 'object') {
+                    await writeCardExtensions(ch.avatar, ext => Object.assign({}, ext, dataPatch.extensions));
+                    if (!done.includes('extensions')) done.push('extensions');
+                }
+                await refreshCharacters();
+                return { ok: true, avatar: ch.avatar, changed: done, via: 'edit-attribute' };
+            }
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
                 throw new Error(err.message || `合并角色卡失败 HTTP ${res.status}`);

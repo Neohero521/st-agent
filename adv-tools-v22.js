@@ -13,6 +13,7 @@ import { loadBook, setEntry, getEntries, entryFields } from './adv-lib-world.js'
 import { c } from './adv-lib-core.js';
 import { toPlacement } from './tools-set-c.js';
 import { charBy, scopedScripts, upsertScoped, allRegexes, scopedAllowed } from './adv-lib-regex.js';
+import { writeCardExtensions } from './adv-lib-card.js';
 import { listSpill, readSpill, setTodos, listSessionsBrief, snapshotSession, usageOf } from './index-sessions.js';
 import { getGoal, changeGoal } from './index-goal.js';
 
@@ -434,28 +435,41 @@ function normalizeSchema(src) {
  * 判重按 id 优先、其次 name——id 是酒馆助手识别固定脚本的唯一依据（mvu-schema / 961f366d… 都靠它）。
  */
 async function putScript(ctx, local, av, item) {
-    const data = local.data || {};
-    const ext = (data.extensions = data.extensions || {});
-    const th = (ext.tavern_helper = ext.tavern_helper || {});
-    if (!Array.isArray(th.scripts)) th.scripts = [];
-    if (!th.variables || typeof th.variables !== 'object') th.variables = {};
-    const scripts = th.scripts.slice();
-    const base = Object.assign({ type: 'script', enabled: true, content: '', info: '', button: { enabled: true, buttons: [] }, data: {}, export_with: { data: true, button: true } }, item);
-    Object.keys(base).forEach(k => { if (base[k] === undefined) delete base[k]; });
-    const idx = scripts.findIndex(s => s && ((base.id && s.id === base.id) || (base.name && String(s.name || '') === base.name)));
-    if (idx >= 0) scripts[idx] = Object.assign({}, scripts[idx], base);
-    else scripts.push(base);
-    const nested = { extensions: { tavern_helper: { scripts, variables: th.variables } } };
-    const body = { avatar: av, data: Object.assign({}, data, nested), extensions: nested.extensions };
-    const res = await fetch('/api/characters/merge-attributes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+    // v1.30：照抄写卡器「写入酒馆」——整块 extensions 走统一通道（edit-attribute → merge → TavernHelper），
+    // 不再单个 key 深合并；旧实现手写 header 缺 CSRF，手机上 403，还会被 merge 把 scripts 吞成 0 条。
+    let created = false;
+    let out = null;
+    let channel = '';
+    const before = local?.data?.extensions?.tavern_helper?.scripts?.length || 0;
+    const r2 = await writeCardExtensions(av, ext => {
+        const th = (ext.tavern_helper = ext.tavern_helper || {});
+        if (!Array.isArray(th.scripts)) th.scripts = [];
+        if (!th.variables || typeof th.variables !== 'object') th.variables = {};
+        const scripts = th.scripts.slice();
+        const base = Object.assign({ type: 'script', enabled: true, content: '', info: '', button: { enabled: true, buttons: [] }, data: {}, export_with: { data: true, button: true } }, item);
+        Object.keys(base).forEach(k => { if (base[k] === undefined) delete base[k]; });
+        const idx = scripts.findIndex(s => s && ((base.id && s.id === base.id) || (base.name && String(s.name || '') === base.name)));
+        if (idx >= 0) scripts[idx] = Object.assign({}, scripts[idx], base);
+        else scripts.push(base);
+        th.scripts = scripts;
+        created = idx < 0;
+        out = base;
+        return ext;
     });
-    if (!res.ok) throw new Error(`写入脚本位失败：HTTP ${res.status}`);
-    Object.assign(local, { data: Object.assign({}, data, nested), extensions: nested.extensions });
+    channel = r2.channel;
     ctx.saveSettingsDebounced?.();
-    return { created: idx < 0, id: base.id, name: base.name, bytes: String(base.content || '').length, scripts: scripts.length };
+    const after = local?.data?.extensions?.tavern_helper?.scripts?.length || 0;
+    return {
+        created,
+        id: out?.id,
+        name: out?.name,
+        bytes: String(out?.content || '').length,
+        scripts: after,
+        before,
+        channel,
+        tried: r2.tried,
+        note: after >= before ? '' : '回读的脚本数比写入前还少：检查是否被酒馆助手覆盖',
+    };
 }
 
 /* ------------------------------ 工具 ------------------------------ */
@@ -1069,7 +1083,7 @@ export const TOOLS = [
             };
             if (!item.id) delete item.id;
             const out = await putScript(ctx, local, av, item);
-            return { ok: true, avatar: av, name: item.name, id: out.id || null, created: out.created, scripts: out.scripts, enabled: item.enabled };
+            return { ok: true, avatar: av, name: item.name, id: out.id || null, created: out.created, scripts: out.scripts, before: out.before, channel: out.channel, tried: out.tried, enabled: item.enabled };
         },
     },
     {
