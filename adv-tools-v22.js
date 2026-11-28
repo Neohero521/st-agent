@@ -1506,13 +1506,16 @@ export const TOOLS = [
             let mvuDir = '';
             for (const dir of ['MagVarUpdate', 'MagVariableUpdate', 'mvu']) {
                 try {
-                    const r = await fetch(`/scripts/extensions/third-party/${dir}/index.js`, { method: 'HEAD' });
+                    const ctrl = new AbortController();
+                    const timer = setTimeout(() => ctrl.abort(), 4000);
+                    const r = await fetch(`/scripts/extensions/third-party/${dir}/index.js`, { method: 'HEAD', signal: ctrl.signal });
+                    clearTimeout(timer);
                     if (r && r.ok) { mvuDir = dir; break; }
-                } catch { /* 探测失败按没装处理 */ }
+                } catch { /* 探测失败/超时按没装处理 */ }
             }
             if (!mvuDir) {
                 problems.push('没探测到 MagVarUpdate（/scripts/extensions/third-party/MagVarUpdate/index.js 不是 200）');
-                fixes.push('先装 MagVarUpdate 扩展；装完刷新页面再跑一次 mvu.doctor');
+                fixes.push('把「没探测到 MagVarUpdate」告诉用户，由用户决定安装方式：把扩展 zip 解到 data/<用户>/extensions/third-party/MagVarUpdate 手动装最稳。**不要自动调 extension.install** —— 后端是 git clone，主机访问 GitHub 常年挂死，会把整轮任务卡在「执行中」');
             }
 
             // ② zod 变量结构脚本

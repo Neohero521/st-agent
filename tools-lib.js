@@ -1,4 +1,5 @@
 import { getContext } from '../../../extensions.js';
+import { fetchWithTimeout, NET_TIMEOUT_MS } from './adv-lib-net.js';
 
 /**
  * 酒馆内部工具集（纯前端，走 SillyTavern 自己的 /api/*，不需要服务端插件）
@@ -9,12 +10,12 @@ export const c = () => getContext();
 
 /* ------------------------------ 请求封装 ------------------------------ */
 
-export async function api(path, body = {}) {
-    const response = await fetch(path, {
+export async function api(path, body = {}, opts = {}) {
+    const response = await fetchWithTimeout(path, {
         method: 'POST',
         headers: c().getRequestHeaders(),
         body: JSON.stringify(body),
-    });
+    }, opts.timeout || NET_TIMEOUT_MS);
     const type = response.headers.get('content-type') || '';
     const data = type.includes('json') ? await response.json().catch(() => null) : await response.text();
     if (!response.ok) {
@@ -24,8 +25,8 @@ export async function api(path, body = {}) {
     return data;
 }
 
-export async function apiGet(path) {
-    const response = await fetch(path, { method: 'GET', headers: c().getRequestHeaders() });
+export async function apiGet(path, opts = {}) {
+    const response = await fetchWithTimeout(path, { method: 'GET', headers: c().getRequestHeaders() }, opts.timeout || NET_TIMEOUT_MS);
     if (!response.ok) throw new Error(`HTTP ${response.status} ${path}`);
     return response.json();
 }
@@ -43,7 +44,7 @@ export async function apiForm(path, fields) {
             form.append(key, String(value));
         }
     }
-    const response = await fetch(path, { method: 'POST', headers, body: form });
+    const response = await fetchWithTimeout(path, { method: 'POST', headers, body: form });
     if (!response.ok) {
         const text = await response.text().catch(() => '');
         throw new Error(`HTTP ${response.status} ${path}：${text.slice(0, 300)}`);
@@ -52,7 +53,7 @@ export async function apiForm(path, fields) {
 }
 
 export async function bridge(path, body = {}) {
-    const response = await fetch(`/api/plugins/st-agent-bridge${path}`, {
+    const response = await fetchWithTimeout(`/api/plugins/st-agent-bridge${path}`, {
         method: 'POST',
         headers: c().getRequestHeaders(),
         body: JSON.stringify(body),

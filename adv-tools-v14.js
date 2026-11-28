@@ -5,6 +5,7 @@
  * 由 tools.js 末尾的探针加载器自动挂载，无需改动 index.js。
  */
 import { getContext } from '../../../extensions.js';
+import { fetchWithTimeout } from './adv-lib-net.js';
 
 const c = () => getContext();
 const UNSET = '__@@UNSET@@__';
@@ -21,7 +22,7 @@ async function scriptModule() {
 }
 
 async function postJson(url, body) {
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
         method: 'POST',
         headers: { ...c().getRequestHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify(body ?? {}),

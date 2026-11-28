@@ -2,6 +2,7 @@ import { getContext } from '../../../extensions.js';
 import { c, participants, indexOfId, roleOf, msgVars, parseValue, stringifyValue, persistChat, refreshMessage, varStore, readVar, writeVar, deleteVar, describeMessage, getMessages, setMessage, createMessage, deleteMessages, swipeMessage } from './adv-lib-core.js';
 import { entryFields, loadBook, getEntries, setEntry, deleteEntry, bindChatBook, POSITIONS, ROLES, setInject, clearInject, listInject } from './adv-lib-world.js';
 import { allRegexes, buildRegExp, testRegex, setRegexEnabled, loadPreset, listPresets, setPersona, helper, helperInfo, listScripts, setScript, scriptMod, getScriptModule } from './adv-lib-ext.js';
+import { fetchWithTimeout } from './adv-lib-net.js';
 
 export async function branchChatAt({ id = -1 } = {}) {
     const index = indexOfId(id);
@@ -348,7 +349,7 @@ export async function searchAllChats({ query, group } = {}) {
         if (!avatar) throw new Error('当前没有选中角色，传 group 或先选角色再搜');
         body.avatar_url = avatar;
     }
-    const res = await fetch('/api/chats/search', {
+    const res = await fetchWithTimeout('/api/chats/search', {
         method: 'POST',
         headers: { ...c0.getRequestHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

@@ -184,6 +184,10 @@ export async function runAgent(task) {
                     }, settings.maxTokens);
                     reply = resumed.text;
                     continueRounds = resumed.rounds;
+                    if (resumed.insideTool && resumed.truncated) {
+                        addLog('error', '工具参数被切在半路：已停止续写，这一步不执行半截调用。下一步把它拆成多次小调用（每次正文 < 2000 字）');
+                        appendTurn('assistant', '工具参数被切断：不再续写，请拆成多次小调用', 'error', '', { flush: false, render: false });
+                    }
                 }
             } catch (error) {
                 draft.cleanup();

@@ -177,6 +177,7 @@ ${toolsPrompt()}${advToolsPrompt()}
 7. schema 的默认值一律中性：数字 \`prefault(0)\`，字符串/布尔/对象/数组 \`prefault(null)\` 且必须先 \`.nullable()\`（\`z.string().nullable().prefault(null)\`）——漏了会在开局初始化时报「期望 string，实际接收 空值(null)」。\`z\` 在酒馆助手 iframe 里是全局，绝不要写 \`import { z } from 'zod'\`。
 8. MVU 要跑起来是**两份脚本**，都存角色卡「酒馆助手」脚本位（不是世界书条目）：① 本体 \`MVU\`（id \`961f366d-e403-45c2-8155-3d14ec86de53\`，content 只有一行 \`import'…MagVarUpdate/artifact/bundle.js';\`，带 6 个隐藏按钮）用 \`mvu.runtime\` 写；② \`变量结构\`（id \`mvu-schema\`，zod schema + \`$(() => registerMvuSchema(Schema))\` 注册尾）用 \`mvu.schema\` 写。只写 schema 不写本体 = 运行时根本没挂上，「变量永远不动」；只写本体没 schema = 没有结构可校验，开局报错。
 9. 脚本对象字段按酒馆助手的 Script 规范：\`type='script'\`、\`enabled\`、\`name\`、\`id\`、\`content\`、\`info\`、\`button{enabled, buttons:[{name, visible}]}\`、\`data{}\`、\`export_with{data, button}\`。要写别的脚本用 \`script.upsert\`（按 id 优先、其次 name 判重）。脚本是在酒馆助手 iframe 里执行的 JS：纯设定文字一律走世界书条目，别塞成脚本。
+10. **缺 MagVarUpdate 时不要自己去装**：\`extension.install\` 走的是后端 \`git clone\`，主机访问 GitHub 常年挂死——工具永不返回、面板一直「执行中」，用户看到的就是「写 MVU 老是卡死」。正确做法是在结论里写清「没探测到 MagVarUpdate」，让用户把扩展 zip 解到 \`data/<user>/extensions/third-party/MagVarUpdate\` 手动装。装扩展、删扩展一律先问用户；不要为了「让 MVU 跑起来」反复 \`extension.delete\` 重试，那不会有新结果，只会刷屏并把任务拖死。
 
 ## 正则脚本（用户要美化显示 / 清理标记 / 生成 MVU 或自定义正则时）
 1. 一律用 \`regex.upsert\`，不要手拼 extensionSettings。**默认写进当前角色卡的正则位（scope=card）**：给某张卡做的状态栏美化、清理标记、MVU 隐藏占位符都属于那张卡，写全局会连别的卡一起改，用户在「正则 → Scoped」页签里也看不到。只有真的全剧通用（例如屏蔽某个内部标记）才显式传 \`scope:"global"\`。

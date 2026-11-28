@@ -1,4 +1,5 @@
 import { c, api, apiGet, apiForm, bridge, pickCharacter, characterSummary, getSettingByPath, refreshCharacters } from './tools-lib.js';
+import { INSTALL_TIMEOUT_MS } from './adv-lib-net.js';
 import { charBy, scopedScripts, upsertScoped, allRegexes, scopedAllowed } from './adv-lib-regex.js';
 
 /**
@@ -87,20 +88,34 @@ export const ST_TOOLS_C = [
     },
     {
         name: 'extension.install',
-        kind: 'exec',
-        desc: '从 Git URL 安装扩展（需要主机已装 git）。',
-        params: { url: 'string 仓库地址' },
+        kind: 'dangerous',
+        desc: '从 Git URL 安装扩展（后端执行 git clone，**很容易挂死**）。默认不执行：必须显式传 confirm:true，而且只有在用户明确说“装吧”时才传。没探测到某个扩展（比如 MagVarUpdate）不等于要自动装——先把情况告诉用户，别自作主张。中国大陆主机访问 GitHub 常年 clone 超时，这时正确做法是让用户手动装 zip。',
+        params: {
+            url: 'string 仓库地址',
+            confirm: 'boolean 必填 true；用户没明确同意安装时不要传',
+        },
         run: async a => {
-            await api('/api/extensions/install', { url: a.url });
-            return { ok: true, url: a.url, note: '刷新页面后生效' };
+            if (a.confirm !== true) {
+                return {
+                    ok: false,
+                    blocked: true,
+                    reason: '安装扩展要用户明确同意：确认后再调用本工具并传 confirm:true',
+                    hint: '不要为了“让 MVU 能跑”自己去装扩展。先把“缺 MagVarUpdate”这件事告诉用户，由用户决定装不装、怎么装（zip 手动装最稳）。',
+                };
+            }
+            const r = await api('/api/extensions/install', { url: a.url }, { timeout: INSTALL_TIMEOUT_MS });
+            return { ok: true, url: a.url, response: r, note: '刷新页面后生效；若本次等了很久，说明主机拉 GitHub 很慢，下次优先让用户手动装 zip' };
         },
     },
     {
         name: 'extension.delete',
         kind: 'dangerous',
-        desc: '删除一个扩展目录（需确认）。',
-        params: { name: 'string 扩展 id（如 third-party/xxx）' },
+        desc: '删除一个扩展目录（需确认）。装扩展失败了不要靠反复 delete 来“重试”：同一目录连续删不会有新结果，只会刷屏并拖住任务。真删之前先问用户。',
+        params: { name: 'string 扩展 id（如 third-party/xxx）', confirm: 'boolean 必填 true' },
         run: async a => {
+            if (a.confirm !== true) {
+                return { ok: false, blocked: true, reason: '删除扩展目录要用户明确同意：确认后再传 confirm:true', hint: '反复删除同名目录不会修好安装失败；先看 extension.list 的真实状态，再决定' };
+            }
             await api('/api/extensions/delete', { extensionName: a.name });
             return { ok: true, deleted: a.name };
         },

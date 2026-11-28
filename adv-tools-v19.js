@@ -19,13 +19,14 @@
  * （view 需要 allowKeysExposure，这里只用 read 的脱敏状态）。
  */
 import { getContext } from '../../../extensions.js';
+import { fetchWithTimeout } from './adv-lib-net.js';
 
 const c = () => getContext();
 
 /* ------------------------------ HTTP ------------------------------ */
 
 async function call(url, body) {
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
         method: 'POST',
         headers: { ...c().getRequestHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify(body ?? {}),

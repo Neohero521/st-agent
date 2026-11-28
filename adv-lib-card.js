@@ -1,4 +1,5 @@
 import { getContext } from '../../../extensions.js';
+import { fetchWithTimeout } from './adv-lib-net.js';
 
 /**
  * 角色卡「写回酒馆」的统一通道（v1.30，照抄写卡器 v329.59 的写入链路）
@@ -68,7 +69,7 @@ export async function writeCardExtensions(avatar, mutate, opts = {}) {
     // ── A. edit-attribute（原生端点，一次替换整块 extensions） ──
     let ok = false;
     try {
-        const res = await fetch('/api/characters/edit-attribute', {
+        const res = await fetchWithTimeout('/api/characters/edit-attribute', {
             method: 'POST',
             headers,
             body: JSON.stringify({
@@ -91,7 +92,7 @@ export async function writeCardExtensions(avatar, mutate, opts = {}) {
     // ── B. merge-attributes（深合并，兜底；必须带 CSRF header） ──
     if (!ok) {
         try {
-            const res = await fetch('/api/characters/merge-attributes', {
+            const res = await fetchWithTimeout('/api/characters/merge-attributes', {
                 method: 'POST',
                 headers,
                 body: JSON.stringify({ avatar: card.avatar, data: { extensions: next }, extensions: next }),

@@ -480,10 +480,21 @@ function looksRepeated(base, chunk) {
  * 续写方式：把已生成的部分作为 assistant 消息喂回去，让它接着写 ——
  * 这比重试一次更强：连被切断的 JSON 参数也能补完整，而不是整段重来。
  */
+/** 截断点是不是落在某个工具调用块里（参数写一半被切断） */
+function truncatedInsideTool(text) {
+    const s = String(text || '');
+    const open = (s.match(/<(?:tool|tool_call|invoke|function_calls)[\s>]/gi) || []).length;
+    const close = (s.match(/<\/(?:tool|tool_call|invoke|function_calls)>/gi) || []).length;
+    return open > close;
+}
+
 export async function continueText(list, first, handlers = {}, maxTokens = 0, limit = 3) {
     let text = String(first ?? '');
     let rounds = 0;
-    while (rounds < limit) {
+    // 工具调用被切断时不要连续 3 次：每次续写都是一整轮生成，参数越长越慢，
+    // 用户在面板上看到的就是「一直转」。续 1 次接不上就直接让模型分批写。
+    let toolLimit = truncatedInsideTool(text) ? 1 : limit;
+    while (rounds < Math.min(limit, toolLimit)) {
         const probe = detectTruncation(text, maxTokens);
         if (!probe.truncated) break;
         rounds++;
@@ -499,8 +510,11 @@ export async function continueText(list, first, handlers = {}, maxTokens = 0, li
         const chunk = String(next.text || '');
         if (!chunk.trim() || looksRepeated(text, chunk)) break;
         text += chunk;
+        if (truncatedInsideTool(text) && rounds >= toolLimit) {
+            handlers.onNote?.('工具参数写太长被切断：不再继续续写，改为分批调用');
+        }
     }
-    return { text, rounds, truncated: detectTruncation(text, maxTokens).truncated };
+    return { text, rounds, truncated: detectTruncation(text, maxTokens).truncated, insideTool: truncatedInsideTool(text) };
 }
 
 /**

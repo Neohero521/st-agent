@@ -5,13 +5,14 @@
  * 由 tools.js 末尾的探针加载器自动挂载（adv-tools-v14 / v15 … v19 已预置），无需改 index.js。
  */
 import { getContext } from '../../../extensions.js';
+import { fetchWithTimeout } from './adv-lib-net.js';
 
 const c = () => getContext();
 
 /* ------------------------------ 基础 ------------------------------ */
 
 async function postJson(url, body) {
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
         method: 'POST',
         headers: { ...c().getRequestHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify(body ?? {}),

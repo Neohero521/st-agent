@@ -69,10 +69,43 @@ export function batchLines(calls) {
     }).join('\n');
 }
 
+/* 重复调用熔断：同一个工具 + 同一份参数 60 秒内第 3 次起直接挡回。
+   典型场景是「装扩展失败 → 连删 5 次」「同一个写接口反复重试」——这些不会产生新结果，
+   只会让面板一直转、把一轮任务拖成几分钟，用户看到的就是卡死。 */
+const _recentCalls = new Map();
+function _callFingerprint(name, args) {
+    try { return name + '|' + JSON.stringify(args || {}).slice(0, 240); } catch { return name + '|?'; }
+}
+function circuitBreaker(name, args) {
+    const key = _callFingerprint(name, args);
+    const now = Date.now();
+    if (_recentCalls.size > 60) {
+        for (const [k, v] of _recentCalls) if (now - v.first > 120000) _recentCalls.delete(k);
+    }
+    const ent = _recentCalls.get(key);
+    if (!ent || now - ent.first > 60000) {
+        _recentCalls.set(key, { first: now, count: 1 });
+        return null;
+    }
+    ent.count += 1;
+    if (ent.count >= 3) {
+        return {
+            ok: false,
+            blocked: true,
+            reason: `同一个调用（${name}，参数相同）在 60 秒内已是第 ${ent.count} 次，已熔断：重复执行不会产生新结果`,
+            hint: '先看上一轮返回的真实内容再决定下一步；如果是安装/删除扩展失败，不要靠反复调用重试 —— 把失败原因和现状告诉用户。',
+        };
+    }
+    return null;
+}
+
 export async function executeTool(call) {
     const tool = toolByName(call.name) || advToolByName(call.name);
     if (!tool) throw new Error(`未知工具：${call.name}`);
     if (call.parseError) throw new Error(`参数不是合法 JSON：${call.parseError}`);
+
+    const tripped = circuitBreaker(call.name, call.args);
+    if (tripped) return tripped;
 
     // 计划门（v1.22）：计划模式下、这份计划还没批准时，写类工具直接挡回。
     // DSH 的 plan-mode 明确只做「软引导」不拦工具；手机端模型爱抢跑，所以这里反过来硬拦——只读工具照常放行。

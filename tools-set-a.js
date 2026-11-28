@@ -1,5 +1,6 @@
 import { c, api, apiGet, apiForm, bridge, pickCharacter, characterSummary, getSettingByPath, refreshCharacters } from './tools-lib.js';
 import { writeCardExtensions } from './adv-lib-card.js';
+import { fetchWithTimeout } from './adv-lib-net.js';
 
 export const ST_TOOLS_A = [
     {
@@ -169,7 +170,7 @@ export const ST_TOOLS_A = [
 
             if (!changed.length) return { ok: true, avatar: ch.avatar, changed: [] };
 
-            const res = await fetch('/api/characters/merge-attributes', {
+            const res = await fetchWithTimeout('/api/characters/merge-attributes', {
                 method: 'POST',
                 headers: c().getRequestHeaders(),
                 body: JSON.stringify({ avatar: ch.avatar, ...patch, data: dataPatch }),
@@ -181,7 +182,7 @@ export const ST_TOOLS_A = [
                 const top = Object.keys(patch).filter(k => k !== 'data');
                 for (const k of top) {
                     if (patch[k] === undefined) continue;
-                    const r2 = await fetch('/api/characters/edit-attribute', {
+                    const r2 = await fetchWithTimeout('/api/characters/edit-attribute', {
                         method: 'POST',
                         headers: c().getRequestHeaders(),
                         body: JSON.stringify({ avatar_url: ch.avatar, ch_name: chName, field: k, value: patch[k] }),

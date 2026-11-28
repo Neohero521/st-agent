@@ -15,6 +15,7 @@
  */
 import { getContext } from '../../../extensions.js';
 import { charBy, scopedScripts, saveScoped, allowScoped } from './adv-lib-regex.js';
+import { fetchWithTimeout } from './adv-lib-net.js';
 
 const c = () => getContext();
 
@@ -70,7 +71,7 @@ async function readonlyWorld(name) {
 async function worldExists(ctx, name) {
     // 权威判定：/api/worldinfo/list 直读磁盘文件名，不依赖前端缓存。
     try {
-        const r = await fetch('/api/worldinfo/list', { method: 'POST', headers: ctx.getRequestHeaders(), body: '{}' });
+        const r = await fetchWithTimeout('/api/worldinfo/list', { method: 'POST', headers: ctx.getRequestHeaders(), body: '{}' });
         if (r.ok) {
             const list = await r.json();
             if (Array.isArray(list) && list.length) {
