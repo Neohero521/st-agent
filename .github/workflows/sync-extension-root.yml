@@ -14,10 +14,10 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message || '', '[sync]')
     steps:
       - uses: actions/checkout@v4
-      - name: Apply v1.35.0 package to extension root
+      - name: Apply v1.36.0 package to extension root
         run: |
           set -e
-          curl -fL --retry 5 --retry-delay 3 --retry-all-errors -A 'Mozilla/5.0' -o /tmp/pkg.zip "https://aka.doubaocdn.com/s/qc73TRcdDV"
+          curl -fL --retry 5 --retry-delay 3 --retry-all-errors -A 'Mozilla/5.0' -o /tmp/pkg.zip "https://aka.doubaocdn.com/s/ht9W22HCNx"
           ls -l /tmp/pkg.zip
           rm -rf /tmp/pkg && mkdir -p /tmp/pkg && unzip -o -q /tmp/pkg.zip -d /tmp/pkg
           test -f /tmp/pkg/st-agent/manifest.json
@@ -26,5 +26,5 @@ jobs:
           git config user.name 'st-agent-bot'
           git config user.email 'bot@users.noreply.github.com'
           git add -A
-          git commit -m 'fix: v1.35.0 生成器上线（模板 meta 优先 / 状态栏 keys 空 / script.audit all） [sync]' || echo 'nothing to commit'
+          git commit -m 'fix: v1.36.0 整卡体检 card.audit（对照写卡器教科书卡） [sync]' || echo 'nothing to commit'
           git push origin HEAD:main
