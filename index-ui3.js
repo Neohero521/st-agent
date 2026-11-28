@@ -208,8 +208,24 @@ export function askPlanReview(plan, signal) {
         title.textContent = `计划待批准：${plan?.title || '(未命名)'}（rev ${plan?.revision || 0}）｜批准后才会放开写盘，拒绝则退回继续完善`;
         const body = document.createElement('div');
         body.className = 'sta-plan-body';
-        body.textContent = String(plan?.body || '');
-        text.append(title, body);
+        const full = String(plan?.body || '');
+        // v1.30：长计划默认折叠。正文太长时先给前 900 字 + 「展开全文」，
+        // 让用户一眼看到计划开头就能判断，也不用滚十几屏才找到按钮。
+        const FOLD = 900;
+        if (full.length > FOLD) {
+            body.textContent = full.slice(0, FOLD) + '…';
+            const more = document.createElement('button');
+            more.className = 'sta-btn ghost sta-plan-more';
+            more.textContent = `展开全文（${full.length} 字）`;
+            more.addEventListener('click', () => {
+                body.textContent = full;
+                more.remove();
+            });
+            text.append(title, body, more);
+        } else {
+            body.textContent = full;
+            text.append(title, body);
+        }
         if (Array.isArray(plan?.items) && plan.items.length) {
             const items = document.createElement('div');
             items.className = 'sta-plan-items';

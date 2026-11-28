@@ -872,3 +872,67 @@ body.sta-lock { overflow: hidden; }
     white-space: nowrap;
     animation: staPulse 1.6s ease-in-out infinite;
 }
+
+/* ═══════════ v1.30 修复：计划审批条把面板压塌 ═══════════
+   症状：计划正文一长（几行到几十行 markdown），.sta-approval 作为 flex 子项不愿收缩，
+   把 .sta-log 挤成 0 高、自己顶出 .sta-panel 的 overflow:hidden 边界，
+   「允许 / 否」按钮被推到屏幕外，且没有任何区域可滚动 —— 整屏点不动。
+   修法：普通审批条限高 + 正文自己滚；计划卡改成浮层（脱离 flex 流），按钮永远钉在卡片底部。 */
+.sta-log { min-height: 0; }
+
+.sta-approval {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    max-height: 40vh;
+    overflow: hidden;
+}
+.sta-approval-text {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding-right: 2px;
+}
+.sta-approval-actions {
+    flex: 0 0 auto;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* 计划卡：从消息流里拿出来，浮在 composer 之上；正文 rolls，按钮钉底 */
+.sta-approval.sta-approval-plan {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+    margin: 0;
+    max-height: min(68vh, 600px);
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px;
+    border-radius: 16px;
+    background: linear-gradient(180deg, rgba(26, 29, 37, 0.98), rgba(13, 15, 20, 0.98));
+    border: 1px solid rgba(216, 178, 106, 0.45);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.62), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    backdrop-filter: blur(14px) saturate(1.1);
+    animation: sta-rise-plan 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes sta-rise-plan {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.sta-approval.sta-approval-plan .sta-approval-text { padding-right: 4px; }
+.sta-approval.sta-approval-plan .sta-plan-body { word-break: break-word; }
+.sta-approval.sta-approval-plan .sta-plan-items { flex: 0 0 auto; max-height: 30vh; overflow-y: auto; }
+.sta-plan-more {
+    margin-top: 6px;
+    width: 100%;
+    justify-content: center;
+}
+@media (max-width: 480px) {
+    .sta-approval.sta-approval-plan { left: 8px; right: 8px; max-height: 74vh; }
+}
