@@ -14,6 +14,7 @@ import { c } from './adv-lib-core.js';
 import { toPlacement } from './tools-set-c.js';
 import { charBy, scopedScripts, upsertScoped, allRegexes, scopedAllowed } from './adv-lib-regex.js';
 import { writeCardExtensions } from './adv-lib-card.js';
+import { fixedMvuRegexes, wrapHtml, unwrapHtml, buildSchemaScript, MVU_RUNTIME_ID, MVU_SCHEMA_ID, FIXED_MVU_REGEX_IDS } from './adv-lib-mvu-assets.js';
 import { listSpill, readSpill, setTodos, listSessionsBrief, snapshotSession, usageOf } from './index-sessions.js';
 import { getGoal, changeGoal } from './index-goal.js';
 
@@ -392,6 +393,11 @@ function normalizeSchema(src) {
     out = out.replace(/^\s*```[a-z]*\s*\r?\n([\s\S]*?)\r?\n```\s*$/i, '$1');
     out = out.replace(/^\s*import\s*\{[^}]*\bz\b[^}]*\}\s*from\s*['"][^'"]*['"];?[ \t]*$/gm, '');
     out = out.replace(/const\s+[A-Za-z_$][\w$]*\s*=\s*z\.object/, 'export const Schema = z.object');
+    // AI 常只给裸 z.object({...})：没有 export const Schema = 时，在第一个 z. 处补上（写卡器模板要求固定导出名）
+    if (!/export\s+const\s+Schema\s*=/.test(out)) {
+        const zi = out.search(/\bz\./);
+        if (zi >= 0) out = out.slice(0, zi) + 'export const Schema = ' + out.slice(zi);
+    }
     if (!/mvu_zod\.js/.test(out)) {
         out = "import { registerMvuSchema } from 'https://testingcf.jsdelivr.net/gh/StageDog/tavern_resource/dist/util/mvu_zod.js';\n\n" + out.replace(/^\s+/, '');
     }
@@ -689,7 +695,7 @@ export const TOOLS = [
             if (!/z\.object/.test(code)) throw new Error('schema 里没有 z.object：确认这是 zod 结构定义');
             const item = { type: 'script', enabled: true, name: '变量结构', id: 'mvu-schema', content: code, info: '自动生成的 MVU 变量结构脚本。', button: { enabled: true, buttons: [] }, data: {}, export_with: { data: true, button: true } };
             const out = await putScript(ctx, local, av, item);
-            return { ok: true, avatar: av, id: 'mvu-schema', bytes: code.length, created: out.created, scripts: out.scripts, registered: /registerMvuSchema\s*\(\s*Schema\s*\)/.test(code), note: 'MVU 生效还需要本体脚本：调 mvu.runtime 写 bundle.js 那一份（id 961f366d-e403-45c2-8155-3d14ec86de53）' };
+            return { ok: true, avatar: av, id: 'mvu-schema', bytes: code.length, created: out.created, scripts: out.scripts, registered: /registerMvuSchema\s*\(\s*Schema\s*\)/.test(code), note: '脚本头尾按写卡器模板归一（import registerMvuSchema → export const Schema = z.object({...}) → $(() => registerMvuSchema(Schema))）；MVU 生效还需要本体脚本：调 mvu.runtime 写 bundle.js 那一份（id 961f366d-e403-45c2-8155-3d14ec86de53），正则调 mvu.statusbar' };
         },
     },
     {
@@ -726,7 +732,7 @@ export const TOOLS = [
     {
         name: 'mvu.statusbar',
         kind: 'write',
-        desc: '写 MVU 状态栏这一套：世界书「状态栏」条目（position=2、depth=2、order=35，内容为完整 HTML，读 stat_data 用 getvar）+ 两条正则——[美化]MVU状态栏（把 <StatusPlaceHolderImpl/> 换成这段 HTML，只影响显示）+ [不发送]隐藏状态栏标记（发给模型前把占位符清掉，免得它照着占位符编造）。两条正则写在角色卡的正则位（scoped），只对这张卡生效，并自动打开卡的正则开关；这张卡换到别的剧本也不会把状态栏糊到别人身上。',
+        desc: '照抄 我的写卡器-v329.59.js 的「写入酒馆」：世界书「状态栏」条目（position=2、depth=2、order=35，内容纯 HTML，读 stat_data 用 getvar）+ 卡级正则一整套 6 条固定脚本（思维链剥离 d668c8a6、只发最新2楼变量 5bb4b588、[美化]变量完成 6fb572ae、[美化]变量更新中 bf1b7441、[不发送]隐藏状态栏标记 mvu-status-hide、[美化]MVU状态栏 mvu-status-bar）。第 6 条的 replaceString 自动 ```html 包裹（酒馆助手按 fence 建 iframe，裸 HTML 不渲染）。6 条都写在角色卡正则位（scoped）并自动开闸，只对这张卡生效。',
         params: {
             book: 'string 世界书名',
             html: 'string 可选，自定义状态栏 HTML（必须含 <StatusPlaceHolderImpl/>）；不传就用 style 模板',
@@ -738,7 +744,8 @@ export const TOOLS = [
         run: async a => {
             if (!a.book) throw new Error('mvu.statusbar 需要 book');
             const chars = Array.isArray(a.chars) && a.chars.length ? a.chars : [String(charBy(a.card)?.name || '角色')];
-            const html = String(a.html || '').trim() || statusBarHtml(chars, a.style);
+            // 照抄写卡器：条目里存纯 HTML；正则里由 fixedMvuRegexes 自动 ```html 包裹
+            const html = unwrapHtml(String(a.html || '').trim() || statusBarHtml(chars, a.style));
             if (!/StatusPlaceHolderImpl/.test(html)) throw new Error('状态栏 HTML 里必须保留 <StatusPlaceHolderImpl/> 占位符');
             const spec = { position: 2, depth: 2, order: 35, constant: false, enabled: true };
             const written = await writeEntry(a.book, '状态栏', html, spec);
@@ -746,28 +753,26 @@ export const TOOLS = [
             // 正则写角色卡（scoped）：MVU 状态栏只属于这张卡，写全局会把别卡的占位符也一起换掉
             const ch = charBy(a.card);
             if (!ch) throw new Error('MVU 状态栏正则必须挂在角色卡上，但当前没有角色卡（群聊/未开卡）：先打开目标角色或传 card=头像文件名');
-            const hide = a.enable_hide !== false;
-            const upsertRx = (id, name, rep, opts) => upsertScoped(ch, Object.assign({
-                id,
-                scriptName: name,
-                findRegex: '/<StatusPlaceHolderImpl\\/>/g',
-                replaceString: rep,
-                placement: toPlacement([2]),
-                disabled: false,
-                runOnEdit: true,
-                substituteRegex: 2,
-                markdownOnly: false,
-                promptOnly: false,
-            }, opts || {}));
-            const bar = await upsertRx('mvu-status-bar', '[美化]MVU状态栏', html, { markdownOnly: true, promptOnly: false });
-            const hidden = hide ? await upsertRx('mvu-status-hide', '[不发送]隐藏状态栏标记', '', { markdownOnly: false, promptOnly: true }) : null;
 
-            // 回读核对：两条必须真的在这张卡的 regex_scripts 里，且开关是开的
+            // ★照抄 我的写卡器-v329.59.js 的 _tavernWriteRegexScripts：一次写全 6 条固定正则
+            const hide = a.enable_hide !== false;
+            const fixed = fixedMvuRegexes(html);
+            for (const rx of fixed) {
+                if (!hide && (rx.id === 'mvu-status-hide')) continue;
+                await upsertScoped(ch, Object.assign({ disabled: false, substituteRegex: 2 }, rx));
+            }
+
+            // 回读核对：6 条必须真的在这张卡的 regex_scripts 里，且开关是开的
             const after = scopedScripts(charBy(a.card));
             const problems = [];
-            if (!after.some(r => r && r.id === 'mvu-status-bar')) problems.push('[美化]MVU状态栏 没写进卡的正则位');
-            if (hide && !after.some(r => r && r.id === 'mvu-status-hide')) problems.push('[不发送]隐藏状态栏标记 没写进卡的正则位');
+            for (const rx of fixed) {
+                if (!hide && rx.id === 'mvu-status-hide') continue;
+                if (!after.some(r => r && r.id === rx.id)) problems.push(`「${rx.scriptName}」没写进卡的正则位（id=${rx.id}）`);
+            }
             if (!scopedAllowed(charBy(a.card))) problems.push('这张卡的正则开关没打开（character_allowed_regex），正则不会生效');
+            if (!after.some(r => r && r.id === 'mvu-status-bar' && String(r.replaceString || '').indexOf('```html') >= 0)) {
+                problems.push('[美化]MVU状态栏 的 replaceString 没有 ```html 包裹：酒馆助手按 fence 渲染状态栏，裸 HTML 不会建 iframe');
+            }
 
             return {
                 ok: problems.length === 0,
@@ -775,7 +780,8 @@ export const TOOLS = [
                 entry_uid: written.uid,
                 regex_scope: 'scoped',
                 character: ch.avatar,
-                regex: hide ? '[美化]MVU状态栏 + [不发送]隐藏状态栏标记' : '[美化]MVU状态栏',
+                regex: '写卡器 6 条固定正则（思维链/变量剥离/变量完成/变量更新中/隐藏占位/状态栏）' + (hide ? '' : '（enable_hide=false，跳过隐藏占位）'),
+                fixed_ids: FIXED_MVU_REGEX_IDS,
                 regex_total_in_card: after.length,
                 problems,
                 bytes: html.length,
@@ -785,7 +791,7 @@ export const TOOLS = [
     {
         name: 'mvu.doctor',
         kind: 'read',
-        desc: 'MVU 变量系统的逐环诊断，只读不写。查六件事：MagVarUpdate 扩展装没装、卡里有没有注册 zod 变量结构的脚本（registerMvuSchema）、7 条世界书条目齐不齐且 position/depth/order/constant 合不合规范、InitVar 里真有的变量与状态栏 HTML 里 getvar 引用的是否逐条对得上、两条状态栏正则是否落在卡上并开了闸、占位符是否只出现一次。返回 problems（坏在哪一环）+ fixes（按顺序照做）+ notes（不致命但对不上）。做卡做到「状态栏不显示」时先跑它，别自己猜。',
+        desc: 'MVU 变量系统的逐环诊断，只读不写。查六件事：MagVarUpdate 扩展装没装、卡里有没有注册 zod 变量结构的脚本（registerMvuSchema）、7 条世界书条目齐不齐且 position/depth/order/constant 合不合规范、InitVar 里真有的变量与状态栏 HTML 里 getvar 引用的是否逐条对得上、写卡器那 6 条固定正则（含两条状态栏）是否落在卡上并开了闸、占位符是否只出现一次。返回 problems（坏在哪一环）+ fixes（按顺序照做）+ notes（不致命但对不上）。做卡做到「状态栏不显示」时先跑它，别自己猜。',
         params: {
             book: 'string 可选，世界书名；不给就用当前角色绑定的世界书',
             card: 'string 可选，头像文件名；不给用当前角色',
@@ -887,29 +893,35 @@ export const TOOLS = [
                 notes.push('InitVar 或 状态栏 只有一条，无法做变量名对齐检查');
             }
 
-            // ⑤ 两条状态栏正则
+            // ⑤ 写卡器 6 条固定正则
             const rs = scopedScripts(ch);
-            const ids = ['mvu-status-bar', 'mvu-status-hide'];
+            const ids = FIXED_MVU_REGEX_IDS.slice();
             const hitIds = ids.filter(id => rs.some(r => r && r.id === id));
             if (ids.length !== hitIds.length) {
                 const lost = ids.filter(id => !hitIds.includes(id));
-                problems.push(`卡里缺状态栏正则：${lost.join('、')}（写在全局正则里不会跟卡走，换张卡就串）`);
-                fixes.push('mvu.statusbar 重跑一遍，它默认 scope=card 并自动开闸');
+                problems.push(`卡里缺 MVU 固定正则 ${lost.length} 条：${lost.join('、')}（写卡器同一套 6 条，缺哪条对应环节就断）`);
+                fixes.push('mvu.statusbar 重跑一遍：它照抄写卡器 _tavernWriteRegexScripts，一次补齐 6 条并自动开闸');
             }
+            const sample = { 'mvu-status-hide': '<StatusPlaceHolderImpl/>', 'mvu-status-bar': '<StatusPlaceHolderImpl/>', 'd668c8a6-fa6a-444d-a5d6-8f68b73a3c36': '<Analysis>x</Analysis>', '5bb4b588-23ca-4564-8df5-882104eff764': '<UpdateVariable><x/></UpdateVariable>', '6fb572ae-a9ea-436d-9779-ad100f1ff7f5': '<UpdateVariable><x/></UpdateVariable>', 'bf1b7441-5cf1-426d-bd6c-911332be9923': '<UpdateVariable><x/>' };
             for (const r of rs.filter(x => x && ids.includes(x.id))) {
                 const raw = String(r.findRegex || '');
                 const mm = raw.match(/^\/([\s\S]+)\/([a-z]*)$/);
                 if (!mm) { problems.push(`正则「${r.scriptName || r.id}」的 findRegex 不是 /.../flags 形式，引擎不会认`); continue; }
                 try {
                     const re = new RegExp(mm[1], mm[2]);
-                    if (!re.test('<StatusPlaceHolderImpl/>')) {
-                        problems.push(`正则「${r.scriptName || r.id}」匹配不到 <StatusPlaceHolderImpl/>，等于没写`);
-                        fixes.push('把 findRegex 改成 /<StatusPlaceHolderImpl\\/>/g');
+                    const probe = sample[r.id] || '';
+                    if (probe && !re.test(probe)) {
+                        problems.push(`正则「${r.scriptName || r.id}」匹配不到样例 ${probe.slice(0, 28)}，等于没写`);
+                        fixes.push('mvu.statusbar 重跑（照抄写卡器的那 6 条 findRegex 已校验过）');
                     }
                 } catch (e) {
                     problems.push(`正则「${r.scriptName || r.id}」编译失败：${e && e.message ? e.message : e}`);
                 }
                 if (r.disabled) { problems.push(`正则「${r.scriptName || r.id}」是禁用状态`); fixes.push('把它 disabled 关掉（或 mvu.statusbar 重跑）'); }
+                if (r.id === 'mvu-status-bar' && String(r.replaceString || '').indexOf('```html') < 0) {
+                    problems.push('[美化]MVU状态栏 的 replaceString 没有 ```html 包裹：酒馆助手按 fence 渲染，裸 HTML 不建 iframe');
+                    fixes.push('mvu.statusbar 重跑（照抄版会自动 ```html 包裹）');
+                }
             }
             if (ch && !scopedAllowed(ch)) {
                 problems.push('这张卡的正则开关没开（character_allowed_regex 不含它的 avatar），卡级正则一条都不会跑');
