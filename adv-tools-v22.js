@@ -20,7 +20,7 @@ import { WC_STATUS_TEMPLATE, mockScript, ensureHtmlDoc, injectMock, parseInitVar
 import { schemaFromInitVar } from './adv-lib-schema-gen.js';
 import { FE_CHAT_BASE_HTML, feChatHtml } from './adv-lib-fe-template.js';
 import { editText, editPreview } from './adv-lib-str-edit.js';
-import { FE_SPEC, STATUSBAR_SPEC, SCRIPT_SPEC, ENTRY_SPEC, auditFrontend, auditStatusbar, auditScript, auditEntryList } from './adv-lib-spec-audit.js';
+import { FE_SPEC, STATUSBAR_SPEC, SCRIPT_SPEC, ENTRY_SPEC, auditFrontend, auditStatusbar, auditScript, auditEntryList, auditRegexScript } from './adv-lib-spec-audit.js';
 import { FE_BEAUTIFY_BASE_HTML, FE_STRUCTURED_BASE_HTML } from './adv-lib-fe-template.js';
 import { planEntry, entryBody, deriveEntryKeys, inferEntryConfig, NONMVU_ENTRY_KINDS } from './adv-lib-entry-auto.js';
 import { SCRIPT_RUNTIME_SPEC, scriptTemplate, SCRIPT_TEMPLATE_KINDS } from './adv-lib-script-spec.js';
@@ -1465,7 +1465,7 @@ export const TOOLS = [
     {
         name: 'entry.audit',
         kind: 'read',
-        desc: '世界书条目体检（非 MVU 条目同样适用）：触发式没 keys=白写、常驻挂 keys、常驻被禁用、重名、正文混 HTML、{{…}} 未闭合、position/depth 语义错配。给 comment/uid 查单条，或 all=true 查整本。返回 problems + fixes + notes。',
+        desc: '世界书条目体检（ST 1.19.1 全字段口径，非 MVU 条目同样适用）：触发式没 keys=白写、常驻挂 keys、常驻被禁用、重名、正文混 HTML、{{…}} 未闭合；v1.41 起还查 position 0–7 合法性、outlet 缺 outletName、atDepth 的 depth 落点、selectiveLogic 0–3、正则 key 的 /pattern/flags 合法性、probability 越界与概率不稳定、sticky/cooldown/delay 类型、互斥组 groupWeight/groupOverride、ignoreBudget、triggers 未知值、characterFilter，并按写卡器模板比对「变量更新规则/输出格式必须 constant=true」。给 comment/uid 查单条，或 all=true 查整本。返回 problems + fixes + notes。',
         params: {
             book: 'string 必填，世界书名',
             comment: 'string 可选，条目名（包含匹配）',
@@ -1483,6 +1483,58 @@ export const TOOLS = [
             }
             const r = auditEntryList(list);
             return Object.assign({ book: a.book, scoped: !a.all }, r);
+        },
+    },
+    {
+        name: 'regex.audit',
+        kind: 'read',
+        desc: '正则体检（ST 1.19.1 regex/engine.js 口径）。逐条查五类硬伤：① 卡内正则总闸 character_allowed_regex 没开——卡里正则一条都不执行，界面看着在也没用；② findRegex 不是 /pattern/flags 或 flags 缺 g——String.replace 只替换第一处，表现为时灵时不灵；③ placement 不是 1–6 的数字数组（0 已废弃 MD_DISPLAY、4 是遗留 sendAs，写成字符串永远不命中）；④ markdownOnly 与 promptOnly 同时为 true（显示与发送各跑一遍，容易自激）；⑤ replaceString 里写了 <% %>（正则替换不执行 EJS，玩家看到源码）。附带 minDepth/maxDepth/trimStrings/substituteRegex 的取值问题。scope=scoped（默认，卡内）/ global / all，支持 id 与 name 过滤，也可直接传一条正则 JSON 体检。只读。',
+        params: {
+            card: 'string 可选，头像文件名（默认当前角色）',
+            scope: 'string 可选，scoped（卡内，默认）/ global（全局）/ all',
+            id: 'string 可选，正则 id 精确匹配',
+            name: 'string 可选，正则名包含匹配',
+            json: 'string 可选，直接给一条正则配置的 JSON 文本（不读卡）',
+        },
+        run: async a => {
+            if (a.json) {
+                let one;
+                try { one = JSON.parse(String(a.json)); } catch (e) { throw new Error('json 不是合法 JSON：' + e.message); }
+                const r = auditRegexScript(one);
+                return Object.assign({ source: 'json 参数' }, r);
+            }
+            const ch = charBy(a.card || c().characterId);
+            const scope = String(a.scope || 'scoped').toLowerCase();
+            if (scope !== 'global' && !ch) throw new Error('没有目标角色卡：查卡内正则要指定卡，或传 scope=global');
+            const all = allRegexes(ch || null);
+            let list = all;
+            if (scope === 'scoped') list = all.filter(x => x.scope === 'scoped');
+            else if (scope === 'global') list = all.filter(x => x.scope === 'global');
+            if (a.id) list = list.filter(x => String(x.id || '') === String(a.id));
+            if (a.name) list = list.filter(x => String(x.scriptName || '').indexOf(String(a.name)) >= 0);
+            const items = list.map(x => {
+                const r = auditRegexScript(x);
+                return {
+                    id: x.id || '', name: x.scriptName || '', scope: x.scope,
+                    placement: x.placement, markdownOnly: !!x.markdownOnly, promptOnly: !!x.promptOnly,
+                    bytes: String(x.replaceString || '').length,
+                    ok: r.ok, problems: r.problems, notes: r.notes,
+                };
+            });
+            const opened = ch ? scopedAllowed(ch) : null;
+            const problems = [];
+            for (const it of items) for (const p of it.problems) problems.push(`[${it.scope}] ${p}`);
+            if (opened === false) problems.unshift('卡内正则总闸没开（character_allowed_regex 里没有这张卡）：卡里这些正则一条都不会执行，要去角色的「正则」页打开总开关，或让插件写入时自动开闸');
+            return {
+                ok: problems.length === 0,
+                scope,
+                card: ch ? ch.avatar : '',
+                scoped_allowed: opened,
+                total: items.length,
+                bad: items.filter(i => !i.ok).length,
+                problems,
+                items,
+            };
         },
     },
     {
@@ -1902,7 +1954,7 @@ export const TOOLS = [
     {
         name: 'card.audit',
         kind: 'read',
-        desc: '整卡体检（对照写卡器教科书卡）：一次查完 InitVar 多套 stat_data 根、schema 与 InitVar 顶层键不一致、z.number 未 coerce、状态栏 HTML 塞进世界书条目、触发式没 keys 白写、模板占位没按题材改写、6 条固定正则缺失或 placement/markdownOnly 配错、缺 MVU 本体或变量结构脚本。拿到别人的卡、自己写完卡、用户报「变量不动 / 状态栏不出来」时先跑这个，比逐项抽查快。v1.40 起还会查四条玩起来才暴露的硬伤：开场白缺 <StatusPlaceHolderImpl/>（状态栏开局空白）、变量更新规则 constant=false 且 keys 空（永不进提示词）、状态栏用 setInterval/MutationObserver 自激重绘（越玩越卡）、状态栏用 _.get / getVariables({type:"message"}) 取值（iframe 里读不到）。只读，不改卡。',
+        desc: '整卡体检（对照写卡器教科书卡）：一次查完 InitVar 多套 stat_data 根、schema 与 InitVar 顶层键不一致、z.number 未 coerce、状态栏 HTML 塞进世界书条目、触发式没 keys 白写、模板占位没按题材改写、6 条固定正则缺失或 placement/markdownOnly 配错、缺 MVU 本体或变量结构脚本。拿到别人的卡、自己写完卡、用户报「变量不动 / 状态栏不出来」时先跑这个，比逐项抽查快。v1.40 起还会查四条玩起来才暴露的硬伤：开场白缺 <StatusPlaceHolderImpl/>（状态栏开局空白）、变量更新规则 constant=false 且 keys 空（永不进提示词）、状态栏用 setInterval/MutationObserver 自激重绘（越玩越卡）、状态栏用 _.get / getVariables({type:"message"}) 取值（iframe 里读不到）。只读，不改卡。v1.41 起按 ST 1.19.1 引擎口径再补四项：卡正则总闸没开（卡内正则一条都不跑）、findRegex 缺 g（只替换第一处）、placement 非数字数组/含非法值、replaceString 里 EJS 不执行，以及条目 position/selectiveLogic/概率/时间效果/互斥组的字段级硬伤。',
         params: {
             card: 'string 可选，头像文件名（默认当前角色）',
             book: 'string 可选，指定世界书名（默认用卡绑定的那本）',
@@ -1920,7 +1972,7 @@ export const TOOLS = [
                     pack.data.character_book = { name: bookName, entries: got.entries || [] };
                 } catch (e) { /* 书不存在就按空处理 */ }
             }
-            const r = auditCardPack(pack);
+            const r = auditCardPack(pack, { scopedAllowed: scopedAllowed(ch) });
             return Object.assign({ card: ch.avatar || '', name: ch.name || '', book: bookName || '' }, r);
         },
     },

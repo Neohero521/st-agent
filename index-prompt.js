@@ -182,6 +182,15 @@ ${toolsPrompt()}${advToolsPrompt()}
 
 11. 卡面还有两处必须自己兜住（写卡器保存卡时会自动做，插件这边要显式写）：① \`data.first_mes\` 和每个 \`alternate_greetings\` 末尾都要带 \`<StatusPlaceHolderImpl/>\`，否则第一轮回复之前状态栏整块空白；② 状态栏脚本里禁止 \`setInterval\` 定时重绘、禁止 \`MutationObserver\` 观察 \`document.body\`（render 改 DOM 又触发观察，150ms 自激重绘，游玩越久越卡），只监听 \`VARIABLE_UPDATE_ENDED\` / \`MESSAGE_UPDATED\` 后 render 一次；取值用 \`waitGlobalInitialized('Mvu')\` 之后的 \`getAllVariables()\`，不要用 \`_.get\` 或 \`getVariables({type:'message'})\`（iframe 里不保证存在，会一路落到兜底、面板显示默认值）。
 
+## 世界书条目（条目配置不对 / 条目「写了却不触发」/ 条目顺序不对时先看这里）
+1. position 只有 0–7：0 before、1 after（角色定义前后，设定/总纲用这两个）、2 ANTop、3 ANBottom（作者注释区）、4 atDepth（按 depth+role 插进对话流，规则/变量类用它）、5 EMTop、6 EMBottom（范例消息区）、7 outlet（必须配 outletName，否则整条被跳过）。**depth 只在 position=4 生效**，别的 position 给 depth 不起作用。
+2. constant 与 keys 二选一：constant=true 每轮必进（规则/格式/元数据），此时 keys 无效；constant=false 必须给 keys，否则永不激活。**selective 只管副键参不参与，跟「常驻」无关**，别拿它当开关。
+3. selectiveLogic：0 AND_ANY / 1 NOT_ALL / 2 NOT_ANY / 3 AND_ALL；selective=false 或副键为空时副键完全不参与判定。
+4. order 只在同一个 position 段内比先后：成品提示词里 **order 小的在前、大的在后（更贴近对话）**，规则类显式给 200~250；同段 order 相同 = 顺序不确定。
+5. key 可以写 \`/pattern/flags\` 直接当正则（此时大小写/整词设置全部失效），模式里的斜杠要写 \`\\/\`；matchWholeWords 对中文基本无效（ST 按空格拆词），中文防误触发靠加长关键词。
+6. 预算默认 25% 上下文，超了的条目**自己就被丢弃**；ignoreBudget=true 会继续插队挤别人。sticky / cooldown / delay 是条数级的保持/冷却/延迟；互斥组用 group + groupWeight（groupOverride=true 直接赢，useGroupScoring 按命中数评分）。正文里的 @@activate / @@dont_activate 会被剥掉并强制/禁止激活。
+7. 卡内 character_book：constant / selective / insertion_order / enabled 写**顶层**，position 写 extensions.position；程序写卡时内部字段与 extensions 的 snake_case 键都写一份更稳。
+
 ## 正则脚本（用户要美化显示 / 清理标记 / 生成 MVU 或自定义正则时）
 1. 一律用 \`regex.upsert\`，不要手拼 extensionSettings。**默认写进当前角色卡的正则位（scope=card）**：给某张卡做的状态栏美化、清理标记、MVU 隐藏占位符都属于那张卡，写全局会连别的卡一起改，用户在「正则 → Scoped」页签里也看不到。只有真的全剧通用（例如屏蔽某个内部标记）才显式传 \`scope:"global"\`。
    写卡级时工具会自动把这张卡记进 \`character_allowed_regex\`（卡的正则开关）；没开闸的正则在卡里躺着也永远不跑——\`regex.list\` 的每条 scoped 都带 \`allowed\`，看完再判断。
@@ -189,11 +198,12 @@ ${toolsPrompt()}${advToolsPrompt()}
 2. placement 传名字（AI_OUTPUT / USER_INPUT / SLASH_COMMAND / WORLD_INFO / REASONING）即可，工具会落成数字——ST 存的是数字数组（1/2/3/5/6），写字符串「列表里看得见但完全不生效」，这是正则最常见的坑。
 3. 三种生效面必须分清：\`markdownOnly\`=只在显示层替换（不污染发给模型的上下文，适合状态栏美化、排版、折叠）；\`promptOnly\`=只在发给模型前替换（适合清掉占位符/内部标记）；两个都 false 才会改写真正存进聊天的正文。
 4. MVU 状态栏固定两条：\`[美化]MVU状态栏\`（findRegex \`/<StatusPlaceHolderImpl\\/>/g\`、markdownOnly=true、替换为状态栏 HTML）、\`[不发送]隐藏状态栏标记\`（同 findRegex、promptOnly=true、替换为空）。直接 \`mvu.statusbar\` 一次建好，别分开手写。
-5. findRegex 写成 \`/pattern/flags\` 字面量；替换串用 \`$1\` 引用分组、\`{{match}}\` 是整段匹配。只有想在 findRegex 里使用 \`{{char}}\` 这类宏时才设 substituteRegex=1（原文）或 2（转义），默认 0。
-6. \`runOnEdit\` 决定编辑消息后是否重跑；同一 scriptName 反复 upsert 是更新而不是新增，不要用近似名字堆同一条正则。
-7. 前端四类（正文美化 / 数据面板 / 0 层卡 / 悬浮球）先 \`fe.spec\` 取规范再动手，落盘一律走 \`fe.regex\`：**HTML 属于正则 replaceString，不属于世界书条目**（整份 HTML 塞条目会让每轮提示词白背几万字符）。kind=beautify 用 \`<tag>…</tag>\` 只包正文（开场白、备用开场白、\`<StatusPlaceHolderImpl/>\` 都不进标签）；structured 整块替换；chat / panel 用一行标记触发，条目只写「输出这一行标记」的短说明。写完跑 \`fe.audit\`：它查完整文档、三类模板的核心函数是否被删、禁用标签、window.top.document、0 层卡的 should_stream / disable_extras / stop_everything / state.messages。
-8. 非 MVU 的脚本与条目也要体检：\`script.audit\` 查崩点（脚本位混 HTML、裸 \`import { z } from 'zod'\`、window.top.document、iframe 里直接取 TavernHelper；传 \`all:true\` 可一次体检卡里全部脚本）；\`entry.audit\` 查白写（触发式没 keys、重名、\`{{\` 未闭合、HTML 进正文）。写卡器的 MVU 模板条目（InitVar、变量输出格式强调、状态变量输出/状态栏）本来就 constant=false 或 enabled=false，工具按模板名豁免，别照着报错去改。
-9. 要「一次写对」而不是写完再改，就用生成器，别自己拼 meta：
+5. findRegex 写成 \`/pattern/flags\` 字面量，**flags 必须带 g**——引擎用的是 String.replace，没有 g 只替换第一处，多处匹配的地方只改一个，表现成「时灵时不灵」；模式内部斜杠写 \`\\/\`。替换串用 \`$1\` 引用分组、\`{{match}}\` 是整段匹配；替换串里的 \`<% %>\` 不会执行（EJS 不参与正则替换，只会把源码显示给玩家）。只有想在 findRegex 里使用 \`{{char}}\` 这类宏时才设 substituteRegex=1（原文）或 2（转义），默认 0。
+6. minDepth / maxDepth 是「深度窗口」：**最新一条消息 depth=0**，所以 minDepth=0 保护不到最新层，写 1 才挡；minDepth=4 表示只改更旧的楼层（写卡器那条「只发送最新2楼」实际写的就是 4）；maxDepth=0 表示只作用于最新一条。最近一条楼层改不动时先看这里。
+7. \`runOnEdit\` 决定编辑消息后是否重跑；同一 scriptName 反复 upsert 是更新而不是新增，不要用近似名字堆同一条正则。
+8. 前端四类（正文美化 / 数据面板 / 0 层卡 / 悬浮球）先 \`fe.spec\` 取规范再动手，落盘一律走 \`fe.regex\`：**HTML 属于正则 replaceString，不属于世界书条目**（整份 HTML 塞条目会让每轮提示词白背几万字符）。kind=beautify 用 \`<tag>…</tag>\` 只包正文（开场白、备用开场白、\`<StatusPlaceHolderImpl/>\` 都不进标签）；structured 整块替换；chat / panel 用一行标记触发，条目只写「输出这一行标记」的短说明。写完跑 \`fe.audit\`：它查完整文档、三类模板的核心函数是否被删、禁用标签、window.top.document、0 层卡的 should_stream / disable_extras / stop_everything / state.messages。
+9. 非 MVU 的脚本与条目也要体检：\`script.audit\` 查崩点（脚本位混 HTML、裸 \`import { z } from 'zod'\`、window.top.document、iframe 里直接取 TavernHelper；传 \`all:true\` 可一次体检卡里全部脚本）；\`entry.audit\` 按 ST 1.19.1 全字段口径查白写（触发式没 keys、重名、\`{{\` 未闭合、HTML 进正文）**以及字段硬伤**（position 0–7、outlet 缺 outletName、selectiveLogic、正则 key 格式、probability 越界、sticky/cooldown/delay 类型、groupWeight/groupOverride、ignoreBudget、triggers 未知值、characterFilter）。它会拿写卡器模板逐条比对 constant：**「变量更新规则 / 变量输出格式 / 变量列表 / 世界元数据」必须是 constant=true**，写成触发式会直接报 problem——照旧经验加 keys 是错的。正则配置有疑问就跑 \`regex.audit\`（卡正则总闸、findRegex 缺 g、placement 非数字数组、EJS 进替换串、minDepth 取值）。
+10. 要「一次写对」而不是写完再改，就用生成器，别自己拼 meta：
    - 条目：\`entry.auto\` 先算（comment + content）——按写卡器口径分档推断 position/depth/order/constant，并从条目名与正文前 100 字派生 keys（剥 \`[分类]\` / ⟦⟧【】、\`<标签>\` 取字段、标点断句、虚词过滤、上限 8、常驻不派生）；给了 book 顺手和现状 diff。
    - 落盘：\`entry.gen\`（kind = 世界元数据 / 角色边界 / 禁止项 / 统一输出格式 / 状态栏 / 自定义条目）。meta 一律以写卡器 ENTRY_TEMPLATES 为准（模板优先于推断）：世界元数据 p0/d0/o240/常驻、角色边界 p0/d2/o80、禁止项 p0/d3/o70、统一输出格式 p0/d1/o85、状态栏 p2/d2/o35/selective 且 keys 空（靠玩家填触发词）、自定义条目 p1/d4/o55 + 派生 keys。状态栏正文只写 \`<StatusPlaceHolderImpl/>\` 的输出要求，**HTML 不进条目**。先 \`dry_run:true\` 看 plan 再真写。
    - 脚本：\`script.spec\` 取运行硬规则（entry/unload/mount/render/buttons/state/errors/libs）；\`script.gen\` 出可直接跑的 4 类模板——floating（纯 div 悬浮球：pointerdown + setPointerCapture，超 4px 才算拖、拖后吞 click，位置存 script 变量，MutationObserver 自愈，pagehide 清理）、hud（stat_data 逐级兜底 + VARIABLE_UPDATE_ENDED + MESSAGE_UPDATED 300ms 防抖 + 1.5s 巡检）、panel（iframe contentDocument.write + srcdoc 兜底 + postMessage 回父页面 triggerSlash）、bar（appendInexistentScriptButtons + getButtonEvent）。\`script.gen\` 内部先跑 \`script.audit\`，有硬伤不落盘。

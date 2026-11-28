@@ -10,6 +10,8 @@
  *  6. 6 条固定正则不全 / placement 不是 [2] / markdownOnly 与 promptOnly 配错
  */
 
+import { auditRegexScript } from './adv-lib-spec-audit.js';
+
 const MVU_FIXED_REGEX = [
     { id: 'd668c8a6-fa6a-444d-a5d6-8f68b73a3c36', name: '仅格式思维链', want: { markdownOnly: false, promptOnly: true, runOnEdit: false } },
     { id: '5bb4b588-23ca-4564-8df5-882104eff764', name: '只发送最新2楼的变量更新', want: { markdownOnly: false, promptOnly: true, runOnEdit: false } },
@@ -143,8 +145,9 @@ export function auditEntries(entries, opts = {}) {
 
         for (const r of ENTRY_ROLES) if (!roles[r.key] && r.test(c)) roles[r.key] = e;
 
-        // 白写：触发式但没 keys
-        if (!constant && selective && keys.length === 0 && e.disable !== true) {
+        // 白写：触发式但没 keys（selective 与「是否常驻」无关，不能拿它当条件）
+        const isNoKeyOk = /状态栏|状态变量输出|自定义条目/.test(c) || /变量更新规则/.test(c); // 状态栏靠正则；更新规则由下面专项判据报
+        if (!constant && keys.length === 0 && e.disable !== true && !isNoKeyOk) {
             problems.push(`「${c}」是触发式但没有 keys：永远进不了提示词，等于白写`);
             fixes.push(`给「${c}」补 keys（专名/地点/动作词 3~5 个），或改 constant=true 常驻`);
         }
@@ -203,8 +206,8 @@ export function auditEntries(entries, opts = {}) {
     return { ok: problems.length === 0, problems, fixes, notes, roles: Object.keys(roles) };
 }
 
-/** 正则集合体检（6 条固定正则 + 配置项） */
-export function auditRegexes(regexes) {
+/** 正则集合体检（6 条固定正则 + 引擎通用口径 + 卡正则总闸） */
+export function auditRegexes(regexes, opts = {}) {
     const list = Array.isArray(regexes) ? regexes : [];
     const problems = [];
     const fixes = [];
@@ -241,6 +244,16 @@ export function auditRegexes(regexes) {
             }
             if (repl.length < 600) notes.push(`状态栏正则 replaceString 只有 ${repl.length} 字符：确认 HTML 完整（教科书卡约 8000）`);
         }
+    }
+    // v1.41：6 条之外/之内都按引擎口径再体检一遍（findRegex 必须带 g、placement 数字数组、EJS 不执行…）
+    for (const r of list) {
+        const g = auditRegexScript(r);
+        for (const p of g.problems) if (problems.indexOf(p) < 0) { problems.push(p); }
+        for (const f of g.fixes) if (fixes.indexOf(f) < 0) fixes.push(f);
+    }
+    if (opts.scopedAllowed === false) {
+        problems.push('这张卡的正则总闸没开（character_allowed_regex 里没有它的 avatar）：卡内正则一条都不会执行，界面里看着在也没用');
+        fixes.push('打开该卡的正则开关（引擎 getScriptsByType(SCOPED,{allowedOnly:true}) 会直接返回空数组）');
     }
     return { ok: problems.length === 0, problems, fixes, notes, found: Object.keys(found) };
 }
@@ -327,7 +340,7 @@ export function auditStatusBar(repl, initText) {
 }
 
 /** 整卡体检：条目 + 正则 + 脚本 + InitVar/schema 联动 */
-export function auditCardPack(pack) {
+export function auditCardPack(pack, opts = {}) {
     const data = (pack && pack.data) || pack || {};
     const ext = data.extensions || {};
     const th = ext.tavern_helper || {};
@@ -344,7 +357,7 @@ export function auditCardPack(pack) {
     const schema = auditSchema(schemaScript ? schemaScript.content : '', init.keys);
     const hasStatusBarRegex = regexes.some(r => String(r.id || '') === 'mvu-status-bar');
     const ents = auditEntries(entries, { hasStatusBarRegex });
-    const regs = auditRegexes(regexes);
+    const regs = auditRegexes(regexes, { scopedAllowed: opts.scopedAllowed });
     const sbRegex = regexes.find(r => String(r.id || '') === 'mvu-status-bar');
     const sb = sbRegex ? auditStatusBar(sbRegex.replaceString, initEntry ? initEntry.content : '') : { ok: true, problems: [], fixes: [], notes: [], hits: 0, total: 0 };
 
@@ -391,8 +404,9 @@ export function auditCardPack(pack) {
                 problems.push('[statusbar] 状态栏挂了 MutationObserver 观察 document.body：render 改 DOM 又会触发观察，150ms 一次自激重绘，这是典型的「玩着玩着就卡」');
                 fixes.push('删掉 MutationObserver，只保留事件驱动 + 初始化时渲染一次');
             }
-            if (/_\.get\(|getVariables\s*\(\s*\{\s*type\s*:\s*['"]message/.test(html)) {
-                problems.push('[statusbar] 状态栏用 lodash 的 _.get / getVariables({type:\'message\'}) 取值：酒馆助手 iframe 里这两个不保证存在，取值会一路失败落到兜底，面板显示成默认值');
+            // 只报 getVariables({type:'message'})：_.get 本身是合法写法（陈天爱就常写 _.get(getAllVariables(), p)）
+            if (/getVariables\s*\(\s*\{\s*type\s*:\s*['"]message['"]\s*\}\s*\)/.test(html)) {
+                problems.push('[statusbar] 状态栏用 getVariables({type:\'message\'}) 直接读楼层变量：酒馆助手 iframe 里这个全局不保证存在，取值一路失败落到兜底，面板显示成默认值');
                 fixes.push('改成 waitGlobalInitialized(\'Mvu\') 之后用 getAllVariables() 取值（写卡器模板的写法）');
             }
             if (/fonts\.googleapis\.com/.test(html)) {

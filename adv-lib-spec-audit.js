@@ -106,28 +106,99 @@ export const SCRIPT_SPEC = {
     ],
 };
 
-/** 世界书条目规范（非 MVU 条目同样适用） */
+/**
+ * 世界书条目规范（ST 1.19.1 world-info.js 口径；非 MVU 条目同样适用）
+ * 全部取值/默认值来自 newWorldInfoEntryDefinition(4082)、world_info_position、world_info_logic。
+ */
 export const ENTRY_SPEC = {
+    source: 'SillyTavern 1.19.1 · public/scripts/world-info.js',
     position: {
-        0: 'before_character_definition —— 世界设定 / 总纲 / 输出格式这类"必须一直在"的内容',
-        1: 'after_character_definition —— 人设、地点、势力等背景材料',
-        2: 'before_prompt（depth 生效）—— 需要贴近对话末尾注入的提醒/状态栏',
-        4: 'at_depth —— 变量规则、变量列表、占位提醒这类每轮都该看的规则',
+        0: 'before —— 角色定义之前：世界设定 / 总纲 / 输出格式这类"必须一直在"的内容',
+        1: 'after —— 角色定义之后：人设、地点、势力等背景材料',
+        2: 'ANTop —— 作者注释顶部：贴在最靠近对话的提示区头部',
+        3: 'ANBottom —— 作者注释底部：比 ANTop 更贴近对话（写卡器没有用过这个位置）',
+        4: 'atDepth —— 按 depth + role 插进对话流：变量规则 / 变量列表 / 占位提醒这类每轮都要看的规则',
+        5: 'EMTop —— 范例消息顶部（有 mes_example 时才看得到）',
+        6: 'EMBottom —— 范例消息底部',
+        7: 'outlet —— 具名插座：必须同时给 outletName，否则这条被跳过并告警',
     },
-    constant: '常驻=蓝灯（constant=true, enabled=true）：每轮都进提示词，适合规则/格式；触发式=绿灯（constant=false + keys）：提到才进，适合人设条目',
+    order: [
+        'order 只在同一个 position 段内比先后，跨段无效（before 段整体仍在角色定义前）',
+        '源码是 sortFn=(a,b)=>b.order-a.order 降序再逐条 unshift，所以成品提示词里 order 小的在前、大的在后',
+        '也就是说：想让某条更靠近对话末端、被模型更重视，把 order 调大；UI 列表里 order 大的显示在上，别被界面骗',
+        '同段 order 相同 = 顺序不确定（取决于数组序），规则/格式条目要显式给不同 order',
+    ],
+    constant: '常驻=true：不进关键词判定，每轮都进提示词（规则/格式/元数据用它）；触发式=false：必须给 keys，提到才进（人设/地点条目用它）。constant=false + keys 空 = 永远不激活',
     keys: [
         'constant=true 的条目不该挂 keys（挂了也不生效，还会让 UI 看着像触发式）',
         'constant=false 且 keys 为空 = 永远不触发，等于白写',
+        'key 可以写 /pattern/flags 直接用正则 test，此时大小写/整词设置全部被忽略',
+        '正则 key 必须写成 /…/flags 且内部不能出现未转义的 /，flags 仅 gimsuy',
+        'matchWholeWords 对中文基本无效（ST 按空格拆词，再用 (?:^|\W)(key)(?:$|\W) 包裹）；中文防误触发要靠更长的复合词',
         'keys 用条目名派生：去掉「的/是/我/你/相关/条目/内容/设定」这类虚词，取 2~4 个字的具体词',
     ],
+    selective: [
+        'selective=true 且 keysecondary 非空：主键命中后再按 selectiveLogic 判副键',
+        'selective=false 或 keysecondary 为空：副键完全不参与，填了也白填',
+        'selectiveLogic：0=AND_ANY（任一命中）1=NOT_ALL（任一不命中）2=NOT_ANY（全部不命中）3=AND_ALL（全部命中）',
+    ],
+    defaults: {
+        constant: false, selective: true, selectiveLogic: 0, order: 100, position: 0,
+        depth: 4, role: 0, probability: 100, useProbability: true, groupWeight: 100,
+        scanDepth: null, caseSensitive: null, matchWholeWords: null, useGroupScoring: null,
+        sticky: null, cooldown: null, delay: null, delayUntilRecursion: 0, ignoreBudget: false,
+        excludeRecursion: false, preventRecursion: false, triggers: [],
+    },
+    overrides: [
+        'scanDepth / caseSensitive / matchWholeWords / useGroupScoring 为 null 时继承全局；给数字/布尔就覆盖全局',
+        '全局默认：scanDepth=2 条消息、budget=25% 上下文、caseSensitive=false、matchWholeWords=false、recursive=false、min_activations=0',
+        'sticky=N 激活后保持 N 条；cooldown=N sticky 结束后 N 条内不再激活；delay=N 最近 N 条内不激活',
+        'delayUntilRecursion=N 只在第 N 层递归扫描时才有资格；excludeRecursion=true 递归轮不再激活；preventRecursion=true 激活后不把自己的内容送进递归扫描',
+        'probability=N 且 useProbability=true 时按 N% 掷骰；没通过当轮直接放弃、后续轮次也不再考虑（sticky 条目免掷）',
+    ],
+    groups: [
+        'group 可用逗号声明多个互斥组；组内先按 sticky 定胜负，再看是否已有成员激活',
+        'groupOverride=true：组内 order 最大的直接赢，其余删除',
+        '没有 groupOverride：按 groupWeight（默认 100）加权随机抽一个',
+        'useGroupScoring=true 或全局开组评分：先按主/副关键词命中数评分，低于组内最高分的被淘汰（可并列保留）',
+    ],
+    budget: [
+        'budget = round(25% × 上下文)，被 budget_cap 截断；超预算的条目自己就被丢弃（不是先收下再截断）',
+        'ignoreBudget=true：不受预算限制，会继续插进提示词并挤占后面的条目',
+    ],
+    decorators: [
+        '正文里的 @@activate / @@dont_activate 会被 parseDecorators 剥掉并直接强制/禁止激活；这两个标记不会进提示词',
+    ],
+    card_format: [
+        '卡内 character_book 的 V2 字段：keys / secondary_keys / insertion_order / enabled / constant / selective / content / comment',
+        'constant、selective、insertion_order、enabled 看顶层；position 优先 extensions.position（数字 0–7），顶层 before_char/after_char 只是回退',
+        '程序写卡建议双写：内部字段 + extensions 的 snake_case 键，别只写一边',
+    ],
     content: [
-        '正文里出现 <% 会被当 EJS 执行：只想放文本就用 <%% 或不写',
-        '{{...}} 必须成对闭合；InitVar 这类 YAML 里禁止出现酒馆宏（初始化时会被替换成乱码）',
+        'ST 不执行 EJS：条目正文里的 <% %> 不会运行，只会原样进提示词（酒馆助手的渲染链另说）；纯文本条目别写',
+        '{{...}} 宏会执行（content 在激活阶段就 substituteParams，key 也会），所以 InitVar 这类 YAML 里不能出现酒馆宏',
         '条目正文不放 HTML：HTML 属于正则 replaceString',
+        '正文会被 placement=5(WORLD_INFO) 的正则再处理一遍，promptOnly 规则太宽会把正文洗成空串导致整条被丢弃',
     ],
 };
 
 const MVU_TEMPLATE_NAMES = /^(世界元数据|状态栏|状态变量输出|统一输出格式|角色边界|禁止项|自定义条目|[\[<]?(InitVar|mvu_update|状态栏)|[\[<]状态栏|变量列表|变量更新|变量输出)/;
+
+/**
+ * MVU 模板条目的期望 constant（写卡器 ENTRY_TEMPLATES 的原值）。
+ * 用途：不是「模板名一律豁免」，而是「按模板比对」——规则类写成触发式要报 problem。
+ * 0 = 写卡器本来就不让它激活（状态栏/状态变量输出/自定义条目 由正则或玩家接管）。
+ */
+const MVU_EXPECT_CONSTANT = [
+    [/世界元数据/, 1], [/统一输出格式/, 1], [/角色边界/, 1], [/禁止项/, 1],
+    [/变量列表/, 1], [/变量更新规则/, 1], [/变量输出格式强调/, 1], [/变量输出格式/, 1],
+    [/InitVar|初始变量/, 1], [/占位符提醒/, 1],
+    [/^状态栏$|「?状态栏」?$/, 0], [/状态变量输出/, 0], [/自定义条目/, 0],
+];
+function expectConstant(comment) {
+    for (const [re, v] of MVU_EXPECT_CONSTANT) if (re.test(String(comment || ''))) return v;
+    return null;
+}
 
 /** 找有开无闭的 {{（CSS/JS 的 }} 不算） */
 function findUnclosedMacro(text) {
@@ -277,19 +348,76 @@ export function auditScript(content, name = '') {
     return { ok: problems.length === 0, bytes: s.length, problems, fixes, notes };
 }
 
-/** 世界书条目体检（可单条，也可整本） */
-export function auditEntryList(entries) {
-    const list = (entries || []).map(e => ({
+/** 引擎合法的触发器取值（constants.js GENERATION_TYPE_TRIGGERS） */
+const WI_TRIGGERS = ['normal', 'continue', 'impersonate', 'swipe', 'regenerate', 'quiet'];
+const WI_LOGIC = { 0: 'AND_ANY（任一命中）', 1: 'NOT_ALL（任一不命中）', 2: 'NOT_ANY（全部不命中）', 3: 'AND_ALL（全部命中）' };
+const KEY_REGEX = /^\/([\s\S]+?)\/([gimsuy]*)$/;
+
+/** normalizeEntry：把「内部字段」与「卡内 V2 字段」统一成一份可判定的结构 */
+function normEntry(e) {
+    const ext = (e && e.extensions) || {};
+    const pick = (...vals) => { for (const v of vals) if (v !== undefined && v !== null) return v; return undefined; };
+    const rawPos = pick(e.position, ext.position);
+    let position = 0;
+    if (typeof rawPos === 'number') position = rawPos;
+    else if (typeof rawPos === 'string') position = rawPos === 'after_char' || rawPos === 'after' ? 1 : 0;
+    const keys = Array.isArray(e.key) ? e.key : (Array.isArray(e.keys) ? e.keys : []);
+    const secondary = Array.isArray(e.keysecondary) ? e.keysecondary : (Array.isArray(e.secondary_keys) ? e.secondary_keys : []);
+    const enabled = e.disable === true ? false : (e.enabled === false ? false : true);
+    return {
         uid: e.uid,
-        comment: e.comment || '',
+        comment: String(e.comment || ''),
         content: String(e.content || ''),
-        position: Number(e.position === undefined ? 0 : e.position),
-        depth: Number(e.depth === undefined ? 4 : e.depth),
-        order: Number(e.order === undefined ? 100 : e.order),
-        constant: !!e.constant,
-        disable: !!e.disable,
-        keys: Array.isArray(e.key) ? e.key : (Array.isArray(e.keys) ? e.keys : []),
-    }));
+        position,
+        depth: Number(pick(e.depth, ext.depth, 4)),
+        role: Number(pick(e.role, ext.role, 0)),
+        order: Number(pick(e.order, e.insertion_order, 100)),
+        constant: pick(e.constant, ext.constant, false) === true,
+        selective: pick(e.selective, ext.selective, true) === true,
+        selectiveLogic: Number(pick(e.selectiveLogic, ext.selectiveLogic, 0)),
+        keys,
+        secondary,
+        enabled,
+        probability: Number(pick(e.probability, ext.probability, 100)),
+        useProbability: pick(e.useProbability, ext.useProbability, true) !== false,
+        sticky: pick(e.sticky, ext.sticky),
+        cooldown: pick(e.cooldown, ext.cooldown),
+        delay: pick(e.delay, ext.delay),
+        group: String(pick(e.group, ext.group, '') || ''),
+        groupWeight: Number(pick(e.groupWeight, ext.group_weight, 100)),
+        groupOverride: pick(e.groupOverride, ext.group_override, false) === true,
+        useGroupScoring: pick(e.useGroupScoring, ext.use_group_scoring),
+        scanDepth: pick(e.scanDepth, ext.scan_depth),
+        caseSensitive: pick(e.caseSensitive, ext.case_sensitive),
+        matchWholeWords: pick(e.matchWholeWords, ext.match_whole_words),
+        ignoreBudget: pick(e.ignoreBudget, ext.ignore_budget, false) === true,
+        triggers: Array.isArray(pick(e.triggers, ext.triggers, [])) ? pick(e.triggers, ext.triggers, []) : [],
+        outletName: String(pick(e.outletName, ext.outlet_name, '') || ''),
+        hasCharFilter: !!(e.characterFilter && (Array.isArray(e.characterFilter.names) || Array.isArray(e.characterFilter.tags))),
+    };
+}
+
+/** 关键词是不是合法的 /pattern/flags 正则（ST 要求整串匹配 + 内部斜杠必须转义） */
+function keyCheck(k) {
+    const str = String(k || '');
+    if (str.indexOf('/') < 0) return { regex: false };
+    const m = str.match(KEY_REGEX);
+    if (!m) return { regex: true, ok: false, why: '不是 /pattern/flags 形式（结尾缺 /flags）' };
+    if (/(^|[^\\])\//.test(m[1])) return { regex: true, ok: false, why: '模式里有未转义的 /（请写成 \\/' };
+    return { regex: true, ok: true };
+}
+
+/** 时间效果字段：null=关，否则必须非负整数 */
+function effectBad(v) {
+    if (v === null || v === undefined || v === '') return null;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0) return `=${JSON.stringify(v)} 不是非负数字`;
+    return null;
+}
+
+/** 世界书条目体检（可单条，也可整本；ST 1.19.1 全字段口径） */
+export function auditEntryList(entries, opts = {}) {
+    const list = (entries || []).map(normEntry);
     const problems = [];
     const fixes = [];
     const notes = [];
@@ -299,7 +427,15 @@ export function auditEntryList(entries) {
     for (const e of list) {
         const tag = `「${e.comment || '(无名 ' + e.uid + ')'}」`;
         if (nameCount[e.comment] > 1) { problems.push(`${tag} 重名：同名的多条会互相顶掉`); fixes.push('改名区分（加 [分类] 前缀）'); }
-        if (!e.constant && !e.keys.length) {
+
+        // ① 激活能力：能不能真的进提示词（模板条目按写卡器原值比对，不是一律豁免）
+        const expectC = expectConstant(e.comment);
+        if (expectC === 0) {
+            if (e.constant) notes.push(`${tag} 写卡器模板里这条本来不激活（靠正则/玩家接管），现在被设成常驻：会白白占提示词预算`);
+        } else if (expectC === 1 && !e.constant) {
+            problems.push(`${tag} 按写卡器模板应当是 constant=true（常驻），现在 constant=false：${e.keys.length ? '靠关键词触发，模型经常看不到' : '而且 keys 为空，这条永远不激活'}`);
+            fixes.push(`把「${e.comment}」改成 constant=true、selective=false（写卡器 ENTRY_TEMPLATES 原值）`);
+        } else if (!e.constant && !e.keys.length) {
             if (MVU_TEMPLATE_NAMES.test(e.comment)) {
                 notes.push(`${tag} 是 MVU 模板条目（写卡器原样就是 constant=false + keys 空）：靠玩家填触发词或手动改常驻，别当成写坏`);
             } else {
@@ -307,30 +443,94 @@ export function auditEntryList(entries) {
                 fixes.push('补 keys（2~4 字具体词），或改成 constant=true 常驻');
             }
         }
-        if (e.constant && e.keys.length) {
-            notes.push(`${tag} 常驻却挂了 ${e.keys.length} 个 keys：keys 不生效，UI 上容易误读成触发式`);
+        if (e.constant && e.keys.length) notes.push(`${tag} 常驻却挂了 ${e.keys.length} 个 keys：keys 不生效，UI 上容易误读成触发式`);
+        if (e.constant && !e.enabled) {
+            if (MVU_TEMPLATE_NAMES.test(e.comment)) notes.push(`${tag} 常驻但 enabled=false：写卡器的 InitVar / 格式强调条目本就不进提示词（只给脚本和变量系统读），正确`);
+            else { problems.push(`${tag} 常驻但被禁用：内容完全不会进提示词`); fixes.push('把 enabled 改 true，或确认它就是给脚本读的数据条目'); }
         }
-        if (e.constant && e.disable) {
-            if (MVU_TEMPLATE_NAMES.test(e.comment)) {
-                notes.push(`${tag} 常驻但 enabled=false：写卡器的 InitVar / 格式强调条目本就不进提示词（只给脚本和变量系统读），正确`);
-            } else {
-                problems.push(`${tag} 常驻但被禁用：内容完全不会进提示词`);
-                fixes.push('把 enabled 改 true，或确认它就是给脚本读的数据条目');
-            }
+
+        // ② 位置 / 深度 / 顺序
+        if (!Number.isInteger(e.position) || e.position < 0 || e.position > 7) {
+            problems.push(`${tag} position=${e.position} 不是合法落点（只有 0–7）`);
+            fixes.push('0 before / 1 after / 2 ANTop / 3 ANBottom / 4 atDepth / 5 EMTop / 6 EMBottom / 7 outlet');
         }
-        if (e.position === 2 && e.depth === 0) {
-            notes.push(`${tag} position=2 且 depth=0：会紧贴最后一条消息注入，确认这是想要的（变量规则一般用 position=4）`);
+        if (e.position === 7 && !e.outletName) {
+            problems.push(`${tag} position=7(outlet) 但没写 outletName：引擎会跳过这条并只在控制台告警`);
+            fixes.push('补 outletName，或把 position 改成 4(atDepth)');
         }
+        if (e.position === 4) {
+            // 写卡器模板条目（更新规则/输出格式/占位提醒）原样就是 p4/d0，不必逐条提示
+            if (e.depth === 0 && !MVU_TEMPLATE_NAMES.test(e.comment)) notes.push(`${tag} position=4 且 depth=0：紧贴最后一条消息注入，确认这是想要的（规则类一般 depth=0~2）`);
+            if (e.depth > 100) notes.push(`${tag} depth=${e.depth} 过大：超出聊天长度后这条实际不会出现在提示词里`);
+        }
+        if (/变量更新规则|变量输出格式|统一输出格式|角色边界|禁止项|世界元数据/.test(e.comment) && e.order === 100) {
+            notes.push(`${tag} 是规则类条目却用默认 order=100：同段内会被同 position 的其他条目压序，建议显式给 order（写卡器给 200~240）`);
+        }
+
+        // ③ 关键词与副键
+        const badKeys = e.keys.map(keyCheck).filter(k => k.regex && !k.ok);
+        if (badKeys.length) {
+            problems.push(`${tag} 有 ${badKeys.length} 个 key 写成了正则但格式非法（${badKeys[0].why}）：这条永远匹配不上`);
+            fixes.push('改成 /pattern/flags（内部斜杠写 \\/，flags 只 gimsuy），或写成普通关键词');
+        }
+        if (!Number.isInteger(e.selectiveLogic) || e.selectiveLogic < 0 || e.selectiveLogic > 3) {
+            problems.push(`${tag} selectiveLogic=${e.selectiveLogic} 非法（只有 0–3）`);
+            fixes.push('0 AND_ANY / 1 NOT_ALL / 2 NOT_ANY / 3 AND_ALL');
+        }
+        if (!e.selective && e.secondary.length) {
+            notes.push(`${tag} selective=false 却填了 ${e.secondary.length} 个副键：副键完全不参与判定（填了等于没填）`);
+        }
+        if (e.selective && e.keys.length && !e.secondary.length) {
+            notes.push(`${tag} selective=true 但副键为空：等同普通单关键词触发，不算错`);
+        }
+        if (e.selective && e.secondary.length && e.selectiveLogic === 1) {
+            notes.push(`${tag} 用了 NOT_ALL（1）：副键「有一个没命中」就激活，最容易莫名触发，确认是这个意图`);
+        }
+        if (e.matchWholeWords === true && e.keys.length && e.keys.every(k => /^[\u4e00-\u9fa5]+$/.test(String(k)))) {
+            notes.push(`${tag} 开了 matchWholeWords 但 keys 全是中文：ST 按空格拆词，中文整词匹配基本不生效（想防误触发就加长关键词）`);
+        }
+
+        // ④ 概率 / 时间效果 / 分组 / 预算
+        if (!Number.isFinite(e.probability) || e.probability < 0 || e.probability > 100) {
+            problems.push(`${tag} probability=${e.probability} 越界（0–100）`);
+            fixes.push('改成 0–100；想每轮必进就 useProbability=false 或 probability=100');
+        } else if (e.useProbability && e.probability < 100 && e.sticky === null) {
+            notes.push(`${tag} 只有 ${e.probability}% 概率激活且没有 sticky：没掷中会当轮直接放弃、之后也不再考虑，表现成「有时出现有时不出现」`);
+        }
+        for (const [name, v] of [['sticky', e.sticky], ['cooldown', e.cooldown], ['delay', e.delay]]) {
+            const why = effectBad(v);
+            if (why) { problems.push(`${tag} ${name}${why}`); fixes.push(`${name} 要么留空，要么写非负整数（条数）`); }
+        }
+        if (e.group && (!Number.isFinite(e.groupWeight) || e.groupWeight <= 0)) {
+            problems.push(`${tag} 在互斥组「${e.group}」里但 groupWeight=${e.groupWeight}：加权随机抽不到它`);
+            fixes.push('groupWeight 给正数（默认 100）');
+        }
+        if (e.groupOverride && !e.group) notes.push(`${tag} groupOverride=true 但没填 group：这个开关不起作用`);
+        if (e.group && e.useGroupScoring === null) notes.push(`${tag} 在互斥组里：要按关键词命中数选优，得开 useGroupScoring 或全局组评分`);
+        if (e.ignoreBudget) notes.push(`${tag} ignoreBudget=true：不受 25% 预算限制，会把后面的条目挤出去，确认是给高频规则用的`);
+
+        // ⑤ 触发类型 / 角色过滤
+        const badTriggers = e.triggers.filter(t => WI_TRIGGERS.indexOf(String(t)) < 0);
+        if (badTriggers.length) {
+            problems.push(`${tag} triggers 含未知取值 ${badTriggers.map(String).join('、')}（合法：${WI_TRIGGERS.join('/')}）`);
+            fixes.push('删掉未知值，只留 normal/continue/impersonate/swipe/regenerate/quiet');
+        }
+        if (e.hasCharFilter) notes.push(`${tag} 带 characterFilter：只在指定角色/标签下激活，换角色试玩会「看不到这条」，别误判成写坏`);
+
+        // ⑥ 正文质量（沿用写卡器口径）
         if (/<!doctype\s|<html[\s>]|<script[\s>]/i.test(e.content)) {
             if (/前端|界面|status|状态栏/.test(e.comment) || /^\s*<div|<!doctype/i.test(e.content.slice(0, 60))) {
                 notes.push(`${tag} 把整段 HTML 放在条目正文里：写卡器的做法是 HTML 进正则 replaceString，条目只留输出格式说明；正文 HTML 会让每轮提示词多背几万字符`);
             } else {
-                problems.push(`${tag} 正文里有 HTML/script：条目正文应是纯文本或 EJS，HTML 该放正则`);
+                problems.push(`${tag} 正文里有 HTML/script：条目正文应是纯文本，HTML 该放正则`);
                 fixes.push('把 HTML 挪到正则 replaceString');
             }
         }
-        if (/<%/.test(e.content) && !/<%[_=-]?>?/.test(e.content)) {
-            notes.push(`${tag} 含 <%：会被当 EJS 执行，确认是有意为之`);
+        if (/<%[\s\S]*?%>/.test(e.content)) {
+            notes.push(`${tag} 正文含 <% %>：ST 不执行 EJS，这段会原样进提示词（只有酒馆助手的渲染链会处理）`);
+        }
+        if (/@@(activate|dont_activate)/.test(e.content)) {
+            notes.push(`${tag} 正文含 @@activate/@@dont_activate：会被剥掉并强制/禁止激活，模型看不到这两个标记`);
         }
         const unclosed = findUnclosedMacro(e.content);
         if (unclosed.length) {
@@ -338,7 +538,100 @@ export function auditEntryList(entries) {
             fixes.push('补上对应的 }}；CSS/JS 里的 }} 不算宏闭合，别被它误导');
         }
     }
-    if (!list.length) problems.push('这个世界里一条条目都没有');
 
-    return { ok: problems.length === 0, total: list.length, problems, fixes, notes };
+    // ⑦ 整本聚合
+    if (!list.length) problems.push('这个世界里一条条目都没有');
+    else {
+        const consts = list.filter(e => e.constant && e.enabled);
+        const mvuish = list.filter(e => MVU_TEMPLATE_NAMES.test(e.comment));
+        if (!consts.length && mvuish.length) {
+            problems.push('整本没有一条「常驻且启用」的条目：规则/输出格式类内容一条都进不了提示词（写卡器每张卡至少 3 条常驻）');
+            fixes.push('把规则类条目改成 constant=true / enabled=true；触发式只留人设、地点这类按需条目');
+        } else if (!consts.length) {
+            notes.push('整本都是触发式条目：纯设定书可以，但要有总纲/规则就至少留一条常驻');
+        }
+        const posCount = {};
+        for (const e of list) posCount[e.position] = (posCount[e.position] || 0) + 1;
+        notes.push(`position 分布：${Object.entries(posCount).map(([k, v]) => k + '×' + v).join('，')}（规则类走 4，设定走 0/1）`);
+    }
+
+    return { ok: problems.length === 0, total: list.length, spec: 'ST 1.19.1', problems, fixes, notes };
+}
+
+/* ------------------------------ 正则单条体检 ------------------------------ */
+
+/** 引擎 placement 合法值（4 为 legacy sendAs，0 为已废弃 MD_DISPLAY） */
+const PLACEMENTS = { 1: 'USER_INPUT', 2: 'AI_OUTPUT', 3: 'SLASH_COMMAND', 5: 'WORLD_INFO', 6: 'REASONING' };
+
+/**
+ * 单条正则体检（ST 1.19.1 regex/engine.js 口径）
+ * 覆盖：findRegex 必须 /…/flags 且带 g、placement 必须是数字数组且在 1–6、markdownOnly/promptOnly 互斥、
+ * replaceString 里 EJS 不执行、minDepth/maxDepth 语义、trimStrings 类型、substituteRegex 取值。
+ */
+export function auditRegexScript(r) {
+    const s = r || {};
+    const problems = [];
+    const fixes = [];
+    const notes = [];
+    const name = `「${s.scriptName || s.name || s.id || '(无名)'}」`;
+    const find = String(s.findRegex || '');
+    if (!find) {
+        problems.push(`${name} 没有 findRegex：这条永远不执行`);
+        fixes.push('补 /pattern/flags');
+    } else {
+        const m = find.match(KEY_REGEX);
+        if (m) {
+            if (!/[g]/.test(m[2])) {
+                problems.push(`${name} flags 里没有 g：ST 用 String.replace，没有 g 只替换第一处，多处匹配的地方只改一个，看起来「时灵时不灵」`);
+                fixes.push('把 flags 改成 g 或 gi / gs');
+            }
+        } else {
+            // 非字面量写法也合法：regexFromString 会把它当纯 pattern 编译，但拿不到任何 flags
+            notes.push(`${name} findRegex 没包成 /pattern/flags（ST 会当纯 pattern 编译、拿不到 flags）：同一标记在一段文本里出现多次时只替换第一处；需要 g 或大小写控制就写成 /pattern/g`);
+        }
+    }
+    const pl = Array.isArray(s.placement) ? s.placement.map(Number) : null;
+    if (!pl) {
+        problems.push(`${name} placement 不是数组：引擎用 placement.includes() 判定，字符串/数字永远不命中`);
+        fixes.push('写成数字数组，如 [2]（AI 输出）/ [1]（用户输入）/ [2,1]（两者都管）');
+    } else {
+        if (!pl.length) { problems.push(`${name} placement 是空数组：任何场景都不命中`); fixes.push('至少给 [2]'); }
+        const bad = pl.filter(n => !Number.isInteger(n) || n < 0 || n > 6 || n === 4 || n === 0);
+        if (bad.length) {
+            problems.push(`${name} placement 含非法值 ${bad.join('、')}：合法只有 ${Object.keys(PLACEMENTS).join('/')}（0 已废弃、4 是遗留 sendAs）`);
+            fixes.push('AI 自回复用 2，用户输入用 1，世界书正文用 5，推理用 6');
+        }
+    }
+    if (s.markdownOnly === true && s.promptOnly === true) {
+        problems.push(`${name} markdownOnly 和 promptOnly 同时为 true：两个分支都会命中，等于在「显示」和「发送」各跑一遍，容易重复替换/自激`);
+        fixes.push('只保留一个；要同时改显示和发送，就不勾任何一个（走「改源头」分支）');
+    }
+    if (/<%[\s\S]*?%>/.test(String(s.replaceString || ''))) {
+        problems.push(`${name} replaceString 里有 <% %>：正则替换不执行 EJS，玩家会看到源码`);
+        fixes.push('换成可执行 JS（```html 围栏里的 <script>）或纯文本');
+    }
+    const minD = s.minDepth;
+    if (minD !== null && minD !== undefined && minD !== '' && !Number.isFinite(Number(minD))) {
+        problems.push(`${name} minDepth=${minD} 不是数字`);
+        fixes.push('留空或写整数（-1 表示不限）');
+    } else if (Number(minD) === 0) {
+        // MVU 六条固定正则本来就该作用于最新楼层（状态栏/思维链/变量美化），不逐条提示
+        if (!/^\[美化\]MVU状态栏|^\[不发送\]隐藏状态栏标记|^仅格式思维链|^只发送最新|^\[美化\]变量/.test(String(s.scriptName || '')))
+            notes.push(`${name} minDepth=0：最新一条消息的 depth 就是 0，等于没保护最新层；要挡住最新一条得写 1`);
+    }
+    const maxD = s.maxDepth;
+    if (maxD !== null && maxD !== undefined && maxD !== '' && !Number.isFinite(Number(maxD))) {
+        problems.push(`${name} maxDepth=${maxD} 不是数字`);
+        fixes.push('留空或写非负整数（0 表示只作用于最新一条）');
+    }
+    if (s.trimStrings !== undefined && s.trimStrings !== null && !Array.isArray(s.trimStrings)) {
+        problems.push(`${name} trimStrings 不是数组：引擎会按数组遍历，非数组会抛错`);
+        fixes.push('改成 [] 或字符串数组');
+    }
+    const sub = s.substituteRegex;
+    if (sub !== undefined && sub !== null && [0, 1, 2].indexOf(Number(sub)) < 0) {
+        notes.push(`${name} substituteRegex=${sub} 不是 0/1/2：引擎会按「未知值用原始正则」处理`);
+    }
+    if (s.disabled === true) notes.push(`${name} 是 disabled 状态：这条现在完全不跑（UI 里能看到，引擎会跳过）`);
+    return { ok: problems.length === 0, name: s.scriptName || s.name || s.id || '', problems, fixes, notes };
 }
