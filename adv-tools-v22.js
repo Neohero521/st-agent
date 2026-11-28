@@ -21,6 +21,8 @@ import { FE_CHAT_BASE_HTML, feChatHtml } from './adv-lib-fe-template.js';
 import { editText, editPreview } from './adv-lib-str-edit.js';
 import { FE_SPEC, STATUSBAR_SPEC, SCRIPT_SPEC, ENTRY_SPEC, auditFrontend, auditStatusbar, auditScript, auditEntryList } from './adv-lib-spec-audit.js';
 import { FE_BEAUTIFY_BASE_HTML, FE_STRUCTURED_BASE_HTML } from './adv-lib-fe-template.js';
+import { planEntry, entryBody, deriveEntryKeys, inferEntryConfig, NONMVU_ENTRY_KINDS } from './adv-lib-entry-auto.js';
+import { SCRIPT_RUNTIME_SPEC, scriptTemplate, SCRIPT_TEMPLATE_KINDS } from './adv-lib-script-spec.js';
 import { listSpill, readSpill, setTodos, listSessionsBrief, snapshotSession, usageOf } from './index-sessions.js';
 import { getGoal, changeGoal } from './index-goal.js';
 
@@ -516,6 +518,34 @@ async function putScript(ctx, local, av, item) {
 
 /* ------------------------------ 工具 ------------------------------ */
 
+// 写卡器模板名兜底匹配：世界元数据 / 状态栏 / 统一输出格式 / 角色边界 / 禁止项
+function pickEntryTemplate(comment) {
+    const c = String(comment || '').trim();
+    const direct = entryTemplate(c);
+    if (direct) return direct;
+    const core = c.replace(/^\s*[\[【][^\]】]*[\]】]\s*/, '').trim();
+    if (core && core !== c) {
+        const d2 = entryTemplate(core);
+        if (d2) return d2;
+    }
+    const NAME_MAP = {
+        '元数据': '世界元数据', '世界元数据': '世界元数据', '世界观': '世界元数据', '世界设定': '世界元数据',
+        '状态栏': '状态栏',
+        '输出格式': '统一输出格式', '统一输出格式': '统一输出格式',
+        '角色边界': '角色边界',
+        '禁止项': '禁止项',
+    };
+    if (NAME_MAP[core]) {
+        const d3 = entryTemplate(NAME_MAP[core]);
+        if (d3) return d3;
+    }
+    const cat = (c.match(/^\s*[\[【]([^\]】]+)[\]】]/) || [])[1] || '';
+    if (/世界|设定/.test(cat)) return entryTemplate('世界元数据');
+    if (/状态栏/.test(cat)) return entryTemplate('状态栏');
+    return null;
+}
+
+// 写卡器模板名兜底匹配
 export const TOOLS = [
     {
         name: 'mvu.templates',
@@ -1021,6 +1051,149 @@ export const TOOLS = [
         },
     },
     {
+        name: 'entry.auto',
+        kind: 'read',
+        desc: '照抄写卡器的条目配置推断：给条目名和正文，算出 position / depth / order / constant / selective / enabled + 自动派生 keys（名字按 · 切分 + 正文前 100 字抽词，剥 [分类]/<标签> 前缀，虚词片段丢掉，上限 8）。命中写卡器模板（世界元数据/角色边界/禁止项/统一输出格式/自定义条目/MVU 各条）时模板 meta 优先。只算不写；传 book 会回读该条目真实 meta 并列出差异。',
+        params: {
+            comment: 'string 必填，条目名（可带 [分类]/<标签> 前缀）',
+            content: 'string 可选，条目正文（不传就只按条目名推断）',
+            book: 'string 可选，世界书名；给了就与该条目现状对比',
+            keys: 'array 可选，显式指定触发词（不给就派生）',
+            constant: 'boolean 可选，强制常驻/触发',
+        },
+        run: async a => {
+            if (!a.comment) throw new Error('entry.auto 需要 comment');
+            const tpl = entryTemplate(String(a.comment));
+            const plan = planEntry(String(a.comment), String(a.content || ''), {
+                templateMeta: tpl ? { position: tpl.position, depth: tpl.depth, order: tpl.order, constant: tpl.constant, selective: tpl.selective, enabled: tpl.enabled, probability: tpl.probability, useProbability: tpl.useProbability } : null,
+                keys: a.keys,
+                constant: a.constant,
+            });
+            let actual = null;
+            let diff = null;
+            if (a.book) {
+                const got = await getEntries({ name: a.book, limit: 500 });
+                const hit = (got.entries || []).find(e => matchEntry(e, String(a.comment)));
+                if (hit) {
+                    actual = { uid: hit.uid, position: hit.position, depth: hit.depth, order: hit.order, constant: !!hit.constant, keys: Array.isArray(hit.key) ? hit.key : [] };
+                    diff = [];
+                    for (const k of ['position', 'depth', 'order', 'constant']) {
+                        if (Number(actual[k]) !== Number(plan.meta[k]) && actual[k] !== plan.meta[k]) diff.push(`${k}: 现在 ${actual[k]} → 建议 ${plan.meta[k]}`);
+                    }
+                    const ak = (actual.keys || []).slice().sort().join('|');
+                    const pk = plan.keys.slice().sort().join('|');
+                    if (ak !== pk) diff.push(`keys: 现在 [${(actual.keys || []).join(',')}] → 建议 [${plan.keys.join(',')}]`);
+                } else {
+                    diff = ['这本书里还没有同名条目'];
+                }
+            }
+            return { ok: true, plan, actual, diff };
+        },
+    },
+    {
+        name: 'entry.gen',
+        kind: 'write',
+        desc: '写一条非 MVU 骨架条目并自动配好 meta：kind=世界元数据 / 角色边界 / 禁止项 / 统一输出格式 / custom。正文不传就用写卡器风格的 YAML 骨架（中文键、短、可直接被模型理解）；meta 走 templates 优先 + inferEntryConfig 兜底，keys 自动派生。落盘走 setEntry（同名更新），写后单条体检。custom 必须给 topic 或 comment。',
+        params: {
+            kind: 'string 必填，世界元数据 / 角色边界 / 禁止项 / 统一输出格式 / custom',
+            book: 'string 必填，世界书名',
+            comment: 'string 可选，条目名（默认取 kind；custom 用它当主题）',
+            content: 'string 可选，正文；不给用骨架',
+            topic: 'string 可选，custom 的主题',
+            keys: 'array 可选，显式触发词',
+            constant: 'boolean 可选，强制常驻',
+            dry_run: 'boolean 可选，只看算出的 meta 与正文',
+        },
+        run: async a => {
+            if (!a.book) throw new Error('entry.gen 需要 book');
+            const kind = String(a.kind || '').trim();
+            const comment = String(a.comment || (kind === 'custom' ? (a.topic || '') : kind)).trim();
+            if (!comment) throw new Error('entry.gen 需要 comment 或 topic');
+            const body = String(a.content || entryBody(kind, { topic: a.topic || comment, comment }));
+            const tpl = pickEntryTemplate(comment);
+            const plan = planEntry(comment, body, {
+                // 命中写卡器模板（世界元数据/角色边界/禁止项/统一输出格式/自定义条目）时，meta 一律以模板为准
+                templateMeta: tpl ? { position: tpl.position, depth: tpl.depth, order: tpl.order, constant: tpl.constant, selective: tpl.selective, enabled: tpl.enabled, probability: tpl.probability, useProbability: tpl.useProbability } : null,
+                keys: a.keys,
+                constant: a.constant,
+                deriveKeys: !(kind === '状态栏' || (tpl && tpl.selective === true && tpl.constant === false && kind !== 'custom')),
+            });
+            if (a.dry_run) return { ok: true, dry_run: true, kind, plan, body };
+            const out = await writeEntry(a.book, comment, body, {
+                position: plan.meta.position, depth: plan.meta.depth, order: plan.meta.order,
+                constant: plan.meta.constant, enabled: plan.meta.enabled !== false,
+                meta: Object.assign({}, plan.meta, { keys: plan.keys, selective: plan.meta.selective }),
+            });
+            const got = await getEntries({ name: a.book, limit: 500 });
+            const hit = (got.entries || []).find(e => Number(e.uid) === Number(out.uid)) || (got.entries || []).find(e => matchEntry(e, comment));
+            const audit = auditEntryList(hit ? [hit] : []);
+            return { ok: true, kind, book: a.book, comment, uid: out.uid || (hit && hit.uid), keys: plan.keys, meta: plan.meta, notes: plan.notes, audit };
+        },
+    },
+    {
+        name: 'script.spec',
+        kind: 'read',
+        desc: '非 MVU 脚本运行规约（照抄写卡器 SCRIPTUI_SPEC + 悬浮球标准写法）：入口 $(()=>errorCatched(init)())、卸载 pagehide、挂载硬规则（脚本里的 $ 就是父页面 jQuery、禁 window.top.document）、三种渲染方式与样式隔离取舍、按钮注册、脚本变量必须带 script_id、错误分级、事件与防抖刷新、悬浮球拖拽与自愈、预置第三方库清单。写脚本前先读它。',
+        params: { kind: 'string 可选，all / runtime / float（默认 all）' },
+        run: async a => {
+            const k = String(a.kind || 'all').toLowerCase();
+            if (k === 'float') return { ok: true, float: SCRIPT_RUNTIME_SPEC.float, mount: SCRIPT_RUNTIME_SPEC.mount };
+            if (k === 'runtime') return { ok: true, runtime: SCRIPT_RUNTIME_SPEC };
+            return { ok: true, runtime: SCRIPT_RUNTIME_SPEC };
+        },
+    },
+    {
+        name: 'script.gen',
+        kind: 'write',
+        desc: '生成并落盘一份可直接跑的非 MVU 脚本（照写卡器规范）：kind=floating（悬浮球，纯 div + pointer 拖拽 + 位置存脚本变量 + MutationObserver 自愈）/ hud（变量小面板，MVU 事件 + MESSAGE_UPDATED 防抖 + 1.5s 巡检兜底）/ panel（独立 iframe 面板 + postMessage 回父页面）/ bar（脚本按钮 + 斜杠命令）。生成后先 script.audit 体检，有硬伤不落盘；通过则写进卡内脚本位并回读。',
+        params: {
+            kind: 'string 必填，floating / hud / panel / bar',
+            card: 'string 可选，头像文件名（默认当前角色）',
+            name: 'string 可选，脚本名（默认按 kind 取）',
+            id: 'string 可选，脚本 id（默认 st-agent-gen-<kind>）',
+            label: 'string 可选，显示文案 / 按钮名',
+            icon: 'string 可选，floating 的图标字符',
+            keys: 'array 可选，hud 要显示的变量键（默认 ["好感度"]）',
+            action: 'string 可选，panel 按钮发出的文本',
+            dry_run: 'boolean 可选，只生成不写卡',
+        },
+        run: async a => {
+            const kind = String(a.kind || '').toLowerCase();
+            if (!SCRIPT_TEMPLATE_KINDS.includes(kind)) throw new Error(`kind 只能是 ${SCRIPT_TEMPLATE_KINDS.join(' / ')}`);
+            const ctx = c();
+            const ch = charBy(a.card || ctx.characterId);
+            if (!ch) throw new Error('script.gen 需要一张角色卡（当前没有开卡）');
+            const name = String(a.name || { floating: '悬浮球', hud: '变量面板', panel: '独立面板', bar: '快捷按钮' }[kind]);
+            const content = scriptTemplate(kind, { id: a.id || `gen${kind}`, label: a.label || name, icon: a.icon, keys: a.keys, action: a.action });
+            const audit = auditScript(content, name);
+            if (a.dry_run) return { ok: true, dry_run: true, kind, bytes: content.length, audit, preview: content.slice(0, 500) };
+            if (audit.problems.length) return { ok: false, blocked: '脚本体检未过，先按 fixes 改模板再写', audit };
+            const buttons = (kind === 'floating' || kind === 'hud' || kind === 'bar')
+                ? [{ name: a.label || name, visible: kind === 'bar' }]
+                : [];
+            const item = {
+                type: 'script',
+                enabled: true,
+                name,
+                id: a.id || `st-agent-gen-${kind}`,
+                content,
+                info: '由 script.gen 生成',
+                button: { enabled: true, buttons },
+                data: {},
+                export_with: { data: true, button: true },
+            };
+            const out = await putScript(ctx, ch, ch.avatar, item);
+            const after = (((charBy(ch.avatar) || {}).data || {}).extensions || {}).tavern_helper || {};
+            const hit = (after.scripts || []).find(x => x && (x.id === item.id || x.name === name));
+            return {
+                ok: !!hit, kind, card: ch.avatar, name, id: out.id || item.id,
+                bytes: content.length, buttons, channel: out.channel, scripts_total: (after.scripts || []).length,
+                audit,
+                note: hit ? '已落盘并回读。刷新后脚本在酒馆助手 iframe 里执行；要改行为用 script.edit 局部改' : '回读没找到这份脚本，检查卡内脚本位或重试',
+            };
+        },
+    },
+    {
         name: 'script.edit',
         kind: 'write',
         desc: '行级编辑卡内脚本（照 DSH edit：old_string 字面唯一匹配，不整体重写）。给一段真实存在的原文 + 替换文，命中唯一才改；命中多时报 AMBIGUOUS 并列出每处行号，找不到时给最近似的 3 行——照这个提示缩窄再来一次，别整段重输。改完走统一写入通道落盘并回读。',
@@ -1199,8 +1372,22 @@ export const TOOLS = [
             id: 'string 可选，脚本 id',
             name: 'string 可选，脚本名（包含匹配）',
             content: 'string 可选，直接给脚本文本',
+            all: 'boolean 可选，体检卡内全部脚本（返回逐条结果）',
         },
         run: async a => {
+            if (!a.content && a.all) {
+                const scripts = ((charBy(a.card || c().characterId)?.data.extensions || {}).tavern_helper || {}).scripts || [];
+                const items = scripts.map(x => {
+                    const r = auditScript(String(x.content || ''), String(x.name || ''));
+                    return { name: x.name || '', id: x.id || '', bytes: String(x.content || '').length, ok: r.ok, problems: r.problems, notes: (r.notes || []).length };
+                });
+                return {
+                    card: a.card || '', total: items.length,
+                    bad: items.filter(i => !i.ok).length,
+                    problems: items.filter(i => !i.ok).map(i => `「${i.name}」` + i.problems.join('；')),
+                    items,
+                };
+            }
             let content = String(a.content || '');
             let source = 'content 参数';
             let name = a.name || '';

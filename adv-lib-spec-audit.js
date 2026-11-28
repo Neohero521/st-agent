@@ -251,15 +251,20 @@ export function auditScript(content, name = '') {
     const notes = [];
     if (!s.trim()) return { ok: false, problems: ['脚本内容是空的'], fixes: [], notes: [] };
 
-    if (/<!doctype\s/i.test(s) || /<html[\s>]/i.test(s)) {
+    // 去注释后再查代码特征，避免注释里写「不要用 window.top.document」被误判
+    const code = s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/[^\n]*$/gm, '');
+    const htmlDoc = /<!doctype\s/i.test(code) || /<html[\s>]/i.test(code);
+    if (htmlDoc && !/contentDocument|srcdoc|createScriptIdIframe/.test(code)) {
         problems.push('脚本里出现完整 HTML 文档：HTML 属于正则 replaceString，不该放脚本位');
         fixes.push('把 HTML 挪进正则（[界面]xxx 的 replaceString），脚本只留逻辑');
+    } else if (htmlDoc) {
+        notes.push('脚本内嵌了 HTML 文档：只在 iframe（contentDocument/srcdoc）里渲染是合法的，不要塞父页面 DOM');
     }
     if (/import\s*\{[^}]*\bz\b[^}]*\}\s*from\s*['"]zod['"]/.test(s)) {
         problems.push("脚本里 import { z } from 'zod'：z 在 MVU Zod 环境是全局，裸 import 会崩");
         fixes.push('删掉这行 import，直接用 z');
     }
-    if (/window\.top\.document/.test(s)) { problems.push('用了 window.top.document（跨域/沙箱抛错）'); fixes.push('用页面 $ 或 createScriptIdIframe()'); }
+    if (/window\.top\.document/.test(code)) { problems.push('用了 window.top.document（跨域/沙箱抛错）'); fixes.push('用页面 $ 或 createScriptIdIframe()'); }
     if (/setInterval/.test(s) && !/MutationObserver/.test(s)) notes.push('有 setInterval：确认不是拿轮询代替事件/观察器');
     if (!/^\s*(\/\/|\/\*|import|const|let|var|function|async|class|\$\(|window\.|document\.)/m.test(s) && s.length > 40) {
         notes.push('开头不像 JS（可能是说明文字混进来了）：脚本位只放可执行代码');
