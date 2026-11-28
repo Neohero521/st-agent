@@ -805,7 +805,7 @@ export const TOOLS = [
     {
         name: 'mvu.runtime',
         kind: 'write',
-        desc: '写 MVU 本体脚本（酒馆助手脚本位里的第二份，id=961f366d-e403-45c2-8155-3d14ec86de53、name=MVU）。内容只有一行 import 指向 MagVarUpdate 的 bundle.js，并带上 5 个隐藏按钮（重新处理变量 / 重新读取初始变量 / 快照楼层 / 重演楼层 / 重试额外模型解析 / 清除旧楼层变量）。很多卡「schema 写了但变量不动」就是因为卡里只有变量结构、没有这份本体：MagVarUpdate 的运行时根本没挂上。',
+        desc: '写 MVU 本体脚本（酒馆助手脚本位里的第二份，id=961f366d-e403-45c2-8155-3d14ec86de53、name=MVU）。内容只有一行 import 指向 MagVarUpdate 的 bundle.js，并带上 6 个隐藏按钮（重新处理变量 / 重新读取初始变量 / 快照楼层 / 重演楼层 / 重试额外模型解析 / 清除旧楼层变量）。很多卡「schema 写了但变量不动」就是因为卡里只有变量结构、没有这份本体：MagVarUpdate 的运行时根本没挂上。',
         params: {
             card: 'string 头像文件名，默认当前角色',
             bundle_url: 'string 可选，替换 bundle.js 的 import 地址（默认 MagVarUpdate artifact）',
@@ -827,7 +827,6 @@ export const TOOLS = [
                 info: '',
                 button: { enabled: true, buttons },
                 data: {},
-                export_with: { data: true, button: true },
             };
             const out = await putScript(ctx, local, av, item);
             return { ok: true, avatar: av, id: '961f366d-e403-45c2-8155-3d14ec86de53', content: item.content, created: out.created, scripts: out.scripts, note: '本体脚本只负责挂 runtime；变量结构仍需 mvu.schema 写一份' };
@@ -1646,7 +1645,7 @@ export const TOOLS = [
     {
         name: 'mvu.audit',
         kind: 'read',
-        desc: '按写卡器 v329.59 checkMvu8Entries 的口径验收一本书的 MVU 八条：①-⑦ 条目是否存在（核心名匹配，兼容 [MVU]变量列表 / 变量当前状态 等变体）+ 每条 position/depth/order/constant/enabled 是否合规范 + 内容特征是否齐（变量列表要 format_message_variable::stat_data、占位提醒要 StatusPlaceHolderImpl、InitVar 不能含 {{ 宏）+ ⑧ 状态栏两条正则是否就位 + 第 1 条 zod schema 脚本是否存在且没有裸 import z。返回 missing 清单与可直接照做的修法。写完 MVU 卡后必须跑一次，空 list 才算完成。',
+        desc: '按写卡器 v329.59 的口径验收一本书的 MVU：6 条本体（[InitVar]/更新规则/输出格式/输出格式强调/变量列表/<状态栏>占位符提醒，核心名匹配、兼容变体）是否存在+ 每条 position/depth/order/constant/enabled 是否合规范 + 内容特征是否齐（变量列表要 format_message_variable::stat_data、占位提醒要 StatusPlaceHolderImpl、InitVar 不能含 {{ 宏）+ ⑧ 状态栏两条正则是否就位 + 第 1 条 zod schema 脚本是否存在且没有裸 import z。返回 missing 清单与可直接照做的修法。写完 MVU 卡后必须跑一次，空 list 才算完成。',
         params: { book: 'string 世界书名', card: 'string 可选，头像文件名（查 schema 脚本用，默认当前角色）' },
         run: async a => {
             if (!a.book) throw new Error('mvu.audit 需要 book');
@@ -1664,7 +1663,7 @@ export const TOOLS = [
                 '<状态栏>占位符提醒': [['StatusPlaceHolderImpl', '缺少 <StatusPlaceHolderImpl/> 占位符']],
                 '状态栏': [['StatusPlaceHolderImpl', '缺少 <StatusPlaceHolderImpl/> 占位符'], [/getvar\s*\(/, '没有 getvar 读取 stat_data，状态栏会是静态死文本']],
             };
-            for (const spec of MVU_SPEC.slice(0, 6).concat([MVU_SPEC[6]])) {
+            for (const spec of MVU_SPEC) {
                 const hit = hitOf(spec);
                 if (!hit) { missing.push(spec.comment); continue; }
                 found.push({ comment: spec.comment, uid: hit.uid, actual: hit.comment });
@@ -1755,7 +1754,7 @@ export const TOOLS = [
                 schema,
                 runtime,
                 ok_all: okAll,
-                next: okAll ? '八条 + 两份脚本齐备，可开始写正文' : [
+                next: okAll ? '6 条本体 + 两份脚本 + 状态栏两条正则齐备，可开始写正文' : [
                     missing.length ? '缺条目：调 mvu.build 一次补齐（会强制纠正配置）' : '',
                     issues.some(x => /schema/.test(x)) ? 'schema 问题：调 mvu.schema 重写脚本位' : '',
                     issues.some(x => /本体脚本/.test(x)) ? '缺 MVU 本体：调 mvu.runtime 写 bundle.js 那一份' : '',
