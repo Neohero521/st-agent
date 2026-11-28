@@ -557,7 +557,7 @@ export const TOOLS = [
                     '`_` 开头=只读（AI 可见不可改）；`$` 开头=派生显示（AI 不可见，只给脚本/EJS 用）。',
                     '变量更新规则里禁止用 TS interface，一律 YAML 的 type / range / check。',
                     '不许在 InitVar 的 YAML 和变量名里写 {{...}} 酒馆宏——它在初始化时会被替换成乱码。',
-                    'MVU 需要用户先在扩展里装 MagVarUpdate（MagVariableUpdate）并注册 zod schema 脚本，否则这些条目只是静态文本；不确定就调 mvu.doctor 逐环诊断。',
+                    'MVU 不需要装任何扩展：本体是卡内一条 `import bundle.js` 的脚本（用 mvu.runtime 写），再配 zod schema 脚本；这两份都在位运行环境才活。不确定就调 mvu.doctor 逐环诊断。',
                     '状态栏 HTML 里 getvar 引用的变量必须和 InitVar 里写的路径严格一致（含大小写与层级），否则那格永远显示 defaults。',
                 ],
             };
@@ -609,7 +609,7 @@ export const TOOLS = [
                 const out = await writeEntry(book, name, content, spec);
                 done.push({ comment: name, uid: out.uid, enabled: spec.enabled, position: spec.position, depth: spec.depth, order: spec.order, chars: String(content).length });
             }
-            return { ok: true, book, written: done.length, entries: done, status_bar_html_bytes: bar.length, note: '状态栏 HTML 不进条目（教科书卡只有「<状态栏>占位符提醒」，HTML 走正则 replaceString）：直接调 mvu.statusbar 写正则；条目不生效时先确认 MagVarUpdate 已安装、schema 脚本已注册' };
+            return { ok: true, book, written: done.length, entries: done, status_bar_html_bytes: bar.length, note: '状态栏 HTML 不进条目（教科书卡只有「<状态栏>占位符提醒」，HTML 走正则 replaceString）：直接调 mvu.statusbar 写正则；不生效时先跑 mvu.doctor 看卡里有没有本体 bundle 脚本和 schema 脚本（不需要装扩展）' };
         },
     },
     {
@@ -1489,7 +1489,7 @@ export const TOOLS = [
     {
         name: 'mvu.doctor',
         kind: 'read',
-        desc: 'MVU 变量系统的逐环诊断，只读不写。查六件事：MagVarUpdate 扩展装没装、卡里有没有注册 zod 变量结构的脚本（registerMvuSchema）、7 条世界书条目齐不齐且 position/depth/order/constant 合不合规范、InitVar 里真有的变量与状态栏 HTML 里 getvar 引用的是否逐条对得上、写卡器那 6 条固定正则（含两条状态栏）是否落在卡上并开了闸、占位符是否只出现一次。返回 problems（坏在哪一环）+ fixes（按顺序照做）+ notes（不致命但对不上）。做卡做到「状态栏不显示」时先跑它，别自己猜。',
+        desc: 'MVU 变量系统的逐环诊断，只读不写。查六件事：卡里有没有挂 MVU 本体（bundle 脚本）——注意 MVU 不需要装扩展，本体只是一条 import bundle.js 的卡内脚本、卡里有没有注册 zod 变量结构的脚本（registerMvuSchema）、7 条世界书条目齐不齐且 position/depth/order/constant 合不合规范、InitVar 里真有的变量与状态栏 HTML 里 getvar 引用的是否逐条对得上、写卡器那 6 条固定正则（含两条状态栏）是否落在卡上并开了闸、占位符是否只出现一次。返回 problems（坏在哪一环）+ fixes（按顺序照做）+ notes（不致命但对不上）。做卡做到「状态栏不显示」时先跑它，别自己猜。',
         params: {
             book: 'string 可选，世界书名；不给就用当前角色绑定的世界书',
             card: 'string 可选，头像文件名；不给用当前角色',
@@ -1502,20 +1502,20 @@ export const TOOLS = [
             const extOf = chx => (chx && chx.data && chx.data.extensions) || {};
             const book = String(a.book || extOf(ch).world || '').trim();
 
-            // ① MagVarUpdate 扩展
-            let mvuDir = '';
-            for (const dir of ['MagVarUpdate', 'MagVariableUpdate', 'mvu']) {
-                try {
-                    const ctrl = new AbortController();
-                    const timer = setTimeout(() => ctrl.abort(), 4000);
-                    const r = await fetch(`/scripts/extensions/third-party/${dir}/index.js`, { method: 'HEAD', signal: ctrl.signal });
-                    clearTimeout(timer);
-                    if (r && r.ok) { mvuDir = dir; break; }
-                } catch { /* 探测失败/超时按没装处理 */ }
-            }
-            if (!mvuDir) {
-                problems.push('没探测到 MagVarUpdate（/scripts/extensions/third-party/MagVarUpdate/index.js 不是 200）');
-                fixes.push('把「没探测到 MagVarUpdate」告诉用户，由用户决定安装方式：把扩展 zip 解到 data/<用户>/extensions/third-party/MagVarUpdate 手动装最稳。**不要自动调 extension.install** —— 后端是 git clone，主机访问 GitHub 常年挂死，会把整轮任务卡在「执行中」');
+            // ① MVU 本体（bundle 脚本）。注意：写卡器**从来不需要装 MagVarUpdate 扩展**——
+            // 它只是在卡的「酒馆助手」脚本位放一行 `import'https://testingcf.jsdelivr.net/gh/.../bundle.js';`，
+            // 运行时由 jsdelivr 拉取。所以判据是「卡里有没有这一条」，不是「extensions/third-party 有没有目录」。
+            const thEarly = (ch && ch.data && ch.data.extensions && ch.data.extensions.tavern_helper) || {};
+            const earlyScripts = flatScripts(thEarly.scripts);
+            const hasBundle = earlyScripts.some(x => String(x.id || '') === '961f366d-e403-45c2-8155-3d14ec86de53'
+                || /MagVarUpdate|bundle\.js/.test(String(x.content || '')));
+            if (!ch) {
+                /* 没开卡由下面第 ② 项统一报，这里不重复 */
+            } else if (!hasBundle) {
+                problems.push('卡里没有 MVU 本体脚本（id 961f366d… 或内容含 bundle.js）：运行时没挂上，变量永远不动');
+                fixes.push('用 mvu.runtime 写一份本体脚本（内容就是一行 import\'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js\';）。**不需要装 MagVarUpdate 扩展，也不要 extension.install** —— 写卡器就是这么做的');
+            } else {
+                notes.push('本体脚本已挂；bundle.js 由 jsdelivr 加载，加载不出来是网络或酒馆助手 iframe 的问题，不是「没装扩展」');
             }
 
             // ② zod 变量结构脚本
@@ -1633,7 +1633,7 @@ export const TOOLS = [
                 ok: problems.length === 0,
                 card: ch ? ch.avatar : '',
                 book,
-                mvu_dir: mvuDir || '',
+                mvu_bundle_script: hasBundle,
                 scripts: scripts.length,
                 schema_scripts: schemaHits.length,
                 entries_found: entries.length,

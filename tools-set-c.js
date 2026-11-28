@@ -89,7 +89,7 @@ export const ST_TOOLS_C = [
     {
         name: 'extension.install',
         kind: 'dangerous',
-        desc: '从 Git URL 安装扩展（后端执行 git clone，**很容易挂死**）。默认不执行：必须显式传 confirm:true，而且只有在用户明确说“装吧”时才传。没探测到某个扩展（比如 MagVarUpdate）不等于要自动装——先把情况告诉用户，别自作主张。中国大陆主机访问 GitHub 常年 clone 超时，这时正确做法是让用户手动装 zip。',
+        desc: '从 Git URL 安装扩展（后端执行 git clone，**很容易挂死**）。默认不执行：必须显式传 confirm:true，而且只有在用户明确说“装吧”时才传。没探测到某个扩展不等于要自动装——先把情况告诉用户，别自作主张。**MVU 更是完全不用装扩展**：本体是卡内一条 import bundle.js 的脚本（mvu.runtime 写），这里不该出现 MagVarUpdate。中国大陆主机访问 GitHub 常年 clone 超时，这时正确做法是让用户手动装 zip。',
         params: {
             url: 'string 仓库地址',
             confirm: 'boolean 必填 true；用户没明确同意安装时不要传',
@@ -100,7 +100,7 @@ export const ST_TOOLS_C = [
                     ok: false,
                     blocked: true,
                     reason: '安装扩展要用户明确同意：确认后再调用本工具并传 confirm:true',
-                    hint: '不要为了“让 MVU 能跑”自己去装扩展。先把“缺 MagVarUpdate”这件事告诉用户，由用户决定装不装、怎么装（zip 手动装最稳）。',
+                    hint: '不要为了“让 MVU 能跑”自己去装扩展 —— MVU 根本不需要扩展，缺本体就用 mvu.runtime 写那条 bundle 脚本。真要装别的扩展，先问用户。',
                 };
             }
             const r = await api('/api/extensions/install', { url: a.url }, { timeout: INSTALL_TIMEOUT_MS });
