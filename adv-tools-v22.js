@@ -1902,7 +1902,7 @@ export const TOOLS = [
     {
         name: 'card.audit',
         kind: 'read',
-        desc: '整卡体检（对照写卡器教科书卡）：一次查完 InitVar 多套 stat_data 根、schema 与 InitVar 顶层键不一致、z.number 未 coerce、状态栏 HTML 塞进世界书条目、触发式没 keys 白写、模板占位没按题材改写、6 条固定正则缺失或 placement/markdownOnly 配错、缺 MVU 本体或变量结构脚本。拿到别人的卡、自己写完卡、用户报「变量不动 / 状态栏不出来」时先跑这个，比逐项抽查快。只读，不改卡。',
+        desc: '整卡体检（对照写卡器教科书卡）：一次查完 InitVar 多套 stat_data 根、schema 与 InitVar 顶层键不一致、z.number 未 coerce、状态栏 HTML 塞进世界书条目、触发式没 keys 白写、模板占位没按题材改写、6 条固定正则缺失或 placement/markdownOnly 配错、缺 MVU 本体或变量结构脚本。拿到别人的卡、自己写完卡、用户报「变量不动 / 状态栏不出来」时先跑这个，比逐项抽查快。v1.40 起还会查四条玩起来才暴露的硬伤：开场白缺 <StatusPlaceHolderImpl/>（状态栏开局空白）、变量更新规则 constant=false 且 keys 空（永不进提示词）、状态栏用 setInterval/MutationObserver 自激重绘（越玩越卡）、状态栏用 _.get / getVariables({type:"message"}) 取值（iframe 里读不到）。只读，不改卡。',
         params: {
             card: 'string 可选，头像文件名（默认当前角色）',
             book: 'string 可选，指定世界书名（默认用卡绑定的那本）',

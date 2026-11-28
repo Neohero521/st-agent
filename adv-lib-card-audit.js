@@ -365,6 +365,41 @@ export function auditCardPack(pack) {
         problems.push('[scripts] 缺「变量结构」脚本：没有结构可校验，开局就报错');
         fixes.push('用 mvu.schema 写入 zod schema');
     }
+
+    // ── v1.40：提示词侧 + 运行侧四条硬判据（这几项错了，卡"装得上"但玩起来不输出变量 / 状态栏不亮）──
+    if (initEntry) {
+        const fm = String(data.first_mes || '');
+        if (!/<StatusPlaceHolderImpl\s*\/>/.test(fm)) {
+            problems.push('[card] 开场白里没有 <StatusPlaceHolderImpl/>：第一次回复之前状态栏整块空白（写卡器保存卡时会自动补在末尾）');
+            fixes.push('在 data.first_mes 末尾追加 <StatusPlaceHolderImpl/>，每个 alternate_greetings 也要追加');
+        }
+        const ruleEntry = entries.find(e => /变量更新规则/.test(String(e.comment || '')));
+        if (ruleEntry) {
+            const keys = Array.isArray(ruleEntry.keys) ? ruleEntry.keys : [];
+            if (!ruleEntry.constant && !keys.length) {
+                problems.push('[entries] 「变量更新规则」constant=false 且 keys 为空：这条永远不会被激活，模型看不到 type/range/check，也就不会算变量');
+                fixes.push('把「变量更新规则」改成 constant=true、selective=false（写卡器模板 meta 就是这样）');
+            }
+        }
+        if (sbRegex) {
+            const html = String(sbRegex.replaceString || '');
+            if (/setInterval\s*\(/.test(html)) {
+                problems.push('[statusbar] 状态栏脚本里有 setInterval 定时重绘：每 1.5 秒重算一次，游玩越久越卡（写卡器模板只靠事件驱动）');
+                fixes.push('删掉 setInterval，改成只监听 VARIABLE_UPDATE_ENDED / MESSAGE_UPDATED 后 render 一次');
+            }
+            if (/MutationObserver/.test(html)) {
+                problems.push('[statusbar] 状态栏挂了 MutationObserver 观察 document.body：render 改 DOM 又会触发观察，150ms 一次自激重绘，这是典型的「玩着玩着就卡」');
+                fixes.push('删掉 MutationObserver，只保留事件驱动 + 初始化时渲染一次');
+            }
+            if (/_\.get\(|getVariables\s*\(\s*\{\s*type\s*:\s*['"]message/.test(html)) {
+                problems.push('[statusbar] 状态栏用 lodash 的 _.get / getVariables({type:\'message\'}) 取值：酒馆助手 iframe 里这两个不保证存在，取值会一路失败落到兜底，面板显示成默认值');
+                fixes.push('改成 waitGlobalInitialized(\'Mvu\') 之后用 getAllVariables() 取值（写卡器模板的写法）');
+            }
+            if (/fonts\.googleapis\.com/.test(html)) {
+                notes.push('[statusbar] 状态栏里引了 Google Fonts：国内常年超时，会拖慢首屏（建议换系统字体栈）');
+            }
+        }
+    }
     const stats = {
         entries: entries.length,
         regexes: regexes.length,

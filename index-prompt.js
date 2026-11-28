@@ -167,7 +167,7 @@ ${toolsPrompt()}${advToolsPrompt()}
 3. 执行回执里 errors 是逐条隔离的——某条失败不影响其余。要反悔就 \`ops.journals\` 找批次 id，\`ops.undo\` 逆序回滚（世界书整本 / 角色字段 / 设置键可回滚；聊天楼层、正则、脚本不行）。
 
 ## MVU 变量系统（用户提到 MVU / 变量系统 / 状态栏 / 好感度时启用）
-1. 先 \`mvu.templates\` 取规范骨架，再 \`mvu.build\` 落盘。7 条条目（[InitVar]初始变量、[mvu_update]变量更新规则、变量输出格式、变量输出格式强调、变量列表、<状态栏>占位符提醒、状态栏）的 position / depth / order / constant 由工具强制，不要自己拼世界书 JSON。
+1. 先 \`mvu.templates\` 取规范骨架，再 \`mvu.build\` 落盘。6 条条目（[InitVar]初始变量、[mvu_update]变量更新规则、变量输出格式、变量输出格式强调、变量列表、<状态栏>占位符提醒）的 position / depth / order / constant 由工具强制，不要自己拼世界书 JSON。**手写条目时 更新规则 / 输出格式 / 变量列表 / 占位提醒 必须是 constant=true、selective=false**——写成 constant=false 且 keys 空就是永不激活，模型看不到规则，也就不会输出变量块。
 2. InitVar 是 YAML，键名用中文变量名；数值写 0、布尔写 false、字符串写占位词、对象写 {}。不要编剧情数值，不要在 YAML 键名里写 {{宏}}。
 3. \`_\` 开头是只读（AI 可见不可改），\`$\` 开头是派生显示（AI 不可见，只给脚本/EJS 用）。变量更新规则只用 YAML 的 type / range / check，禁止 TS interface。
 4. 模型侧输出契约：正文末尾先给 \`<UpdateVariable>\`（内含 \`<Analysis>\` 与 \`<JSONPatch>\`），整条回复最后一行是 \`<StatusPlaceHolderImpl/>\`。数值增减用 delta，绝对赋值用 replace，新键/新元素用 insert，删用 remove。
@@ -178,6 +178,9 @@ ${toolsPrompt()}${advToolsPrompt()}
 8. MVU 要跑起来是**两份脚本**，都存角色卡「酒馆助手」脚本位（不是世界书条目）：① 本体 \`MVU\`（id \`961f366d-e403-45c2-8155-3d14ec86de53\`，content 只有一行 \`import'…MagVarUpdate/artifact/bundle.js';\`，带 6 个隐藏按钮）用 \`mvu.runtime\` 写；② \`变量结构\`（id \`mvu-schema\`，zod schema + \`$(() => registerMvuSchema(Schema))\` 注册尾）用 \`mvu.schema\` 写。只写 schema 不写本体 = 运行时根本没挂上，「变量永远不动」；只写本体没 schema = 没有结构可校验，开局报错。
 9. 脚本对象字段按酒馆助手的 Script 规范：\`type='script'\`、\`enabled\`、\`name\`、\`id\`、\`content\`、\`info\`、\`button{enabled, buttons:[{name, visible}]}\`、\`data{}\`、\`export_with{data, button}\`。要写别的脚本用 \`script.upsert\`（按 id 优先、其次 name 判重）。脚本是在酒馆助手 iframe 里执行的 JS：纯设定文字一律走世界书条目，别塞成脚本。
 10. **MVU 不需要装扩展，永远不要为它调 extension.install**：写卡器的做法是在卡的「酒馆助手」脚本位写一条 \`import'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js';\`（id \`961f366d-e403-45c2-8155-3d14ec86de53\`、name \`MVU\`），运行时由 jsdelivr 拉取，跟 extensions/third-party 里有没有目录毫无关系。缺本体就调 \`mvu.runtime\` 补写，不要用目录探测去判「装没装」，更不要 git clone —— \`extension.install\` 是后端 git clone，国内主机常年挂死，会把整轮任务卡在「执行中」。装扩展、删扩展一律先问用户，也不要用反复 delete 当重试。
+
+
+11. 卡面还有两处必须自己兜住（写卡器保存卡时会自动做，插件这边要显式写）：① \`data.first_mes\` 和每个 \`alternate_greetings\` 末尾都要带 \`<StatusPlaceHolderImpl/>\`，否则第一轮回复之前状态栏整块空白；② 状态栏脚本里禁止 \`setInterval\` 定时重绘、禁止 \`MutationObserver\` 观察 \`document.body\`（render 改 DOM 又触发观察，150ms 自激重绘，游玩越久越卡），只监听 \`VARIABLE_UPDATE_ENDED\` / \`MESSAGE_UPDATED\` 后 render 一次；取值用 \`waitGlobalInitialized('Mvu')\` 之后的 \`getAllVariables()\`，不要用 \`_.get\` 或 \`getVariables({type:'message'})\`（iframe 里不保证存在，会一路落到兜底、面板显示默认值）。
 
 ## 正则脚本（用户要美化显示 / 清理标记 / 生成 MVU 或自定义正则时）
 1. 一律用 \`regex.upsert\`，不要手拼 extensionSettings。**默认写进当前角色卡的正则位（scope=card）**：给某张卡做的状态栏美化、清理标记、MVU 隐藏占位符都属于那张卡，写全局会连别的卡一起改，用户在「正则 → Scoped」页签里也看不到。只有真的全剧通用（例如屏蔽某个内部标记）才显式传 \`scope:"global"\`。
