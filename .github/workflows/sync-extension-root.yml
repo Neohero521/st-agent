@@ -11,7 +11,7 @@ permissions:
 jobs:
   apply:
     runs-on: ubuntu-latest
-    if: "!contains(github.event.head_commit.message, '[sync]')"
+    if: ${{ !contains(github.event.head_commit.message, '[sync]') }}
     steps:
       - uses: actions/checkout@v4
       - name: Apply v1.37.0 package to extension root
