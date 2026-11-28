@@ -421,4 +421,151 @@ export const TOOLS = [
             return { ok: true, action, tree: layout(), scripts: flatten(tree).length };
         },
     },
+    {
+        name: 'card.series',
+        kind: 'write',
+        desc: '成套写「系列卡」：一个世界观拆 N 张卡——共享层（MVU 7 条 / schema 脚本 / 状态栏正则）每张卡各写一份，'
+            + '独有层（这一卷的人设条目、独有脚本）各写各的，世界书只建一本。'
+            + '默认只预演（逐卡列出条数/风险/错误）；commit:true 才逐卡落盘，每卡一批、每卡可单独 ops.undo。'
+            + '多卷独有条目默认自动加 [卡名] 前缀，避免两卷同名条目互相覆盖。',
+        params: {
+            book: 'object {name, create?, bind?}：共享的那本世界书',
+            shared: 'object {entries[], scripts[], regexes[]}：每张卡都要有的公共资产。世界书共享条目只写一次，脚本/正则每卡各一份（卡内资产）',
+            cards: 'array [{card, fields?, entries?, scripts?, regexes?}]：每张卡。entries 是这一卷独有、写进同一本书的条目',
+            prefix: 'boolean 默认 true：给每卷独有条目的 comment 加 [卡名] 前缀',
+            commit: 'boolean 默认 false（只预演）',
+        },
+        run: async a => {
+            const list = Array.isArray(a.cards) ? a.cards : [];
+            if (!list.length) throw new Error('cards 为空：至少要一张卡');
+            const bookName = String(a.book?.name || '').trim();
+            if (!bookName) throw new Error('book.name 为空：系列卡共用一本世界书，必须给名字');
+            const shared = a.shared && typeof a.shared === 'object' ? a.shared : {};
+            const shEntries = Array.isArray(shared.entries) ? shared.entries : [];
+            const shScripts = Array.isArray(shared.scripts) ? shared.scripts : [];
+            const shRegexes = Array.isArray(shared.regexes) ? shared.regexes : [];
+            const usePrefix = a.prefix !== false;
+
+            // ① 重名检测（不前缀时同名的独有条目会互相覆盖）
+            const conflicts = [];
+            const seen = new Map();
+            const cardNameOf = v => String(v?.card || v?.name || '').trim();
+            list.forEach(v => {
+                const who = cardNameOf(v);
+                for (const e of Array.isArray(v?.entries) ? v.entries : []) {
+                    const cm = String(e?.comment || '').trim();
+                    if (!cm || usePrefix) continue;
+                    if (seen.has(cm)) conflicts.push(`${cm} 同时出现在「${seen.get(cm)}」和「${who}」`);
+                    else seen.set(cm, who);
+                }
+            });
+            if (conflicts.length) {
+                throw new Error(`不同卷的独有条目重名（会互相覆盖）：${conflicts.join('；')}。传 prefix:true 自动加 [卡名] 前缀，或自己改名`);
+            }
+
+            // ② 编译每卡的 compose 规格
+            const specs = [];
+            list.forEach((v, i) => {
+                const name = cardNameOf(v);
+                if (!name) throw new Error(`第 ${i + 1} 张卡缺 card 名`);
+                const entries = [];
+                if (i === 0) entries.push(...shEntries);
+                for (const e of Array.isArray(v.entries) ? v.entries : []) {
+                    if (!e) continue;
+                    entries.push(usePrefix && e.comment
+                        ? Object.assign({}, e, { comment: `[${name}]${String(e.comment).trim()}` })
+                        : e);
+                }
+                const needBook = entries.length > 0 || (i === 0 && (a.book?.create || shEntries.length));
+                specs.push({
+                    card: name,
+                    fields: v.fields,
+                    book: needBook ? { name: bookName, create: i === 0 && !!a.book?.create, entries } : undefined,
+                    scripts: shScripts.concat(Array.isArray(v.scripts) ? v.scripts : []),
+                    regexes: shRegexes.concat(Array.isArray(v.regexes) ? v.regexes : []),
+                });
+            });
+
+            const buildAll = async () => {
+                const out = [];
+                for (const spec of specs) {
+                    const got = await buildOps(spec);
+                    out.push({ spec, ops: got.ops, notes: got.notes });
+                }
+                return out;
+            };
+
+            // ③ 预演
+            if (!a.commit) {
+                const built = await buildAll();
+                const rows = [];
+                let total = 0;
+                let highest = 0;
+                for (const b of built) {
+                    const plan = await planOps(b.ops);
+                    rows.push({
+                        card: b.spec.card,
+                        ops: b.ops.length,
+                        counts: plan.counts,
+                        highestRisk: plan.highest,
+                        errors: plan.errors,
+                        notes: b.notes.filter(Boolean),
+                    });
+                    total += b.ops.length;
+                    highest = Math.max(highest, plan.highest || 0);
+                }
+                return {
+                    ok: rows.every(r => r.errors.length === 0),
+                    committed: false,
+                    book: bookName,
+                    cards: rows,
+                    total,
+                    highestRisk: highest,
+                    conflicts,
+                    hint: '这是预演，没有写盘。确认后带 commit:true 再调一次：会逐卡执行、逐卡回读，每卡一批可单独 ops.undo。',
+                };
+            }
+
+            // ④ 落盘：重新编译一次（拿最新 uid），逐卡执行 + 回读
+            const built = await buildAll();
+            const out = [];
+            let totalOps = 0;
+            for (const b of built) {
+                const plan = await planOps(b.ops);
+                if (plan.errors.length) {
+                    out.push({ card: b.spec.card, ok: false, skipped: true, errors: plan.errors });
+                    continue;
+                }
+                const applied = await opsApply({ ops: b.ops });
+                const check = await verify(b.spec);
+                totalOps += b.ops.length;
+                out.push({
+                    card: b.spec.card,
+                    ok: applied.ok !== false && check.ok,
+                    applied: {
+                        applied: applied.applied,
+                        failed: applied.failed,
+                        skipped: applied.skipped,
+                        journalId: applied.journal,
+                        undoable: applied.undoable,
+                        errors: applied.errors,
+                    },
+                    verify: check,
+                    problems: check.problems,
+                });
+            }
+            const bad = out.filter(r => !r.ok);
+            return {
+                ok: bad.length === 0,
+                committed: true,
+                book: bookName,
+                cards: out,
+                total: totalOps,
+                problems: bad.map(r => `${r.card}：${(r.problems || r.errors || []).join('；')}`),
+                hint: bad.length
+                    ? '有卡没落地：按 problems 点名的那张单独补，或对它的 journalId 用 ops.undo 回滚这一卡。'
+                    : '全部回读通过。共享层的条目只写了一次，脚本与正则每卡各一份。',
+            };
+        },
+    },
 ];

@@ -253,6 +253,12 @@ ${toolsPrompt()}${advToolsPrompt()}
 4. 想读全就用 \`session.read\` 打开 \`idx\`（session.match 会给你），它只回一条 + 前后各两条摘要，不是整段历史回放。
 5. 搜到的东西是证据不是结论：引用前确认 \`uid / 条目名 / 卡名\` 对得上再照抄。
 
+## 系列卡（card.series，一个世界观拆多张卡）
+1. 先用 \`card.compose\` 把**第一张**跑通（预演 → commit → 回读全绿），再上 \`card.series\` 批量铺剩下的：不然错一次要回滚 N 份。
+2. 分两层：\`shared\` 放每张卡都要有的（MVU 7 条 + schema 脚本 + 状态栏正则 + 公共人设条目），\`cards[]\` 放这一卷独有的（人设条目、独有脚本、独有正则）。共享的世界书条目只写一次，脚本/正则**每卡各一份**（它们本身就是卡内资产，不共享会漏）。
+3. 多卷独有条目默认 \`prefix:true\` 自动加 \`[卡名]\` 前缀——不加就会两卷同名互相覆盖。要自定义命名就传 \`prefix:false\` 并自己保证不撞（撞了会直接报错，不会静默覆盖）。
+4. 先预演：看每卡几条、风险几级、哪张有 errors。commit 后逐卡回读，没落地的会点名到具体卡；每卡一批独立 journal，要退就 \`ops.undo\` 那一卡的 journalId。
+
 ## 计划模式（settings.planMode 打开时，「先规划后动手」）
 1. 顺序固定：\`plan.write\` 写整份计划（markdown，**必须以 # 标题开头**，写清改哪些对象、什么顺序、每步怎么验收、哪里可能回滚）→ \`plan.submit\` 提交评审（弹一张批准卡）→ 用户批准后写类工具才放行。
 2. 它是硬门不是建议：计划模式下，这份计划还处于 draft / pending / rejected 时，所有写类工具（char.edit、world.upsertEntry、script.upsert、card.compose、ops.apply …）会被直接挡回并返回 blocked。只读工具（char.get / world.get / script.list / chat.recent / usage.get）照常放行，先探索再写计划。
