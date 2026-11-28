@@ -244,6 +244,79 @@ export function auditRegexes(regexes) {
     return { ok: problems.length === 0, problems, fixes, notes, found: Object.keys(found) };
 }
 
+
+/** InitVar 的变量树路径（用于和状态栏 getvar 的路径比对） */
+export function yamlPaths(text) {
+    const paths = new Set();
+    const stack = [];
+    for (const line of String(text || '').split(/\r?\n/)) {
+        if (!line.trim() || /^\s*#/.test(line)) continue;
+        const m = line.match(/^(\s*)([^:#\s][^:]*):\s*(.*)$/);
+        if (!m) continue;
+        const indent = m[1].length;
+        const key = m[2].trim();
+        while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
+        const parent = stack.length ? stack[stack.length - 1].key : '';
+        const full = parent ? parent + '.' + key : key;
+        paths.add(full);
+        stack.push({ indent, key: full });
+    }
+    return paths;
+}
+
+/**
+ * 状态栏 HTML 体检（对比教科书卡：真 JS 渲染 + getAllVariables + 事件驱动 + 路径存在）
+ * 最狠的一条：正则 replaceString 不执行 EJS，写 <% getvar() %> 会原样显示成源码。
+ */
+export function auditStatusBar(repl, initText) {
+    const s = String(repl || '');
+    const problems = [];
+    const fixes = [];
+    const notes = [];
+    if (!s.trim()) return { ok: false, problems: ['状态栏正则 replaceString 是空的'], fixes: [], notes, hits: 0, total: 0 };
+
+    if (/<%[\s\S]*?%>/.test(s)) {
+        problems.push('状态栏 replaceString 里用了 EJS 模板语法 <% %>：**正则替换不执行 EJS**，玩家看到的是 <%- getvar(…) %> 源码。状态栏必须是自执行 JS（$(...) 里 getAllVariables 后逐字段填 DOM）');
+        fixes.push('删掉所有 <% %>，改成 <!DOCTYPE html> + <script> 里 $(async () => { await waitGlobalInitialized("Mvu"); ... getAllVariables().stat_data ... }) + eventOn(VARIABLE_UPDATE_ENDED, render)');
+    }
+    if (/StatusPlaceHolderImpl/.test(s)) {
+        problems.push('状态栏 replaceString 里又出现 <StatusPlaceHolderImpl/>：这是被替换的那个占位符本身，替换结果里再留一个会二次触发/露出文字');
+        fixes.push('删掉 replaceString 内部的占位符，只留渲染后的 HTML');
+    }
+    if (!/\$\s*\(/.test(s) && !/<script/i.test(s)) {
+        notes.push('状态栏没有 $( / <script>：不是可执行的渲染页，只会是一段静态 DOM');
+    }
+    if (!/VARIABLE_UPDATE_ENDED|eventOn|Mvu\.events/.test(s)) {
+        notes.push('状态栏没有监听 VARIABLE_UPDATE_ENDED：变量更新后不会刷新，要等下一次整楼重渲染');
+    }
+    if (!/getAllVariables|getVariables/.test(s)) {
+        notes.push('状态栏没有走 getAllVariables：只能硬读固定键，改字段名就整块空白');
+    }
+    if (!/^(\s*)```html/.test(s) && !/<!DOCTYPE/i.test(s)) {
+        notes.push('状态栏 replaceString 既没有 ```html 围栏也没有 <!DOCTYPE html>：酒馆助手可能不建 iframe');
+    }
+
+    // 路径存在性：状态栏读的 stat_data.X 必须真的在 InitVar 树里
+    const tree = yamlPaths(initText);
+    const roots = [...new Set([...tree].map(p => p.split('.')[0]))];
+    const reqs = [];
+    for (const m of s.matchAll(/stat_data\.([A-Za-z0-9_\u4e00-\u9fa5.]+)/g)) reqs.push(m[1]);
+    const uniq = [...new Set(reqs)];
+    const bad = [];
+    for (const r of uniq) {
+        const ok = roots.some(root => r === root || r.indexOf(root + '.') === 0) && (tree.has(r) || [...tree].some(p => p.indexOf(r + '.') === 0));
+        if (!ok) bad.push(r);
+    }
+    if (uniq.length && bad.length === uniq.length) {
+        problems.push(`状态栏读的 ${uniq.length} 个路径在 InitVar 里一个都不存在（例如 ${bad.slice(0, 3).join('、')}）：整块状态栏会是空的/默认值`);
+        fixes.push('让两边同名同层：InitVar 顶层根 = 状态栏 stat_data.<根> 的第一段（如「陈天爱」「世界」），不要一边平铺一边多套人物层');
+    } else if (bad.length) {
+        problems.push(`状态栏有 ${bad.length}/${uniq.length} 个路径在 InitVar 里不存在：${bad.slice(0, 5).join('、')}`);
+        fixes.push('按 InitVar 的实际键名改状态栏里的 getvar 路径');
+    }
+    return { ok: problems.length === 0, problems, fixes, notes, hits: uniq.length - bad.length, total: uniq.length, bad: bad.slice(0, 8) };
+}
+
 /** 整卡体检：条目 + 正则 + 脚本 + InitVar/schema 联动 */
 export function auditCardPack(pack) {
     const data = (pack && pack.data) || pack || {};
@@ -263,8 +336,10 @@ export function auditCardPack(pack) {
     const hasStatusBarRegex = regexes.some(r => String(r.id || '') === 'mvu-status-bar');
     const ents = auditEntries(entries, { hasStatusBarRegex });
     const regs = auditRegexes(regexes);
+    const sbRegex = regexes.find(r => String(r.id || '') === 'mvu-status-bar');
+    const sb = sbRegex ? auditStatusBar(sbRegex.replaceString, initEntry ? initEntry.content : '') : { ok: true, problems: [], fixes: [], notes: [], hits: 0, total: 0 };
 
-    const levels = { init, schema, entries: ents, regexes: regs };
+    const levels = { init, schema, statusbar: sb, entries: ents, regexes: regs };
     const problems = [];
     const fixes = [];
     const notes = [];
@@ -289,6 +364,7 @@ export function auditCardPack(pack) {
         schemaKeys: schema.keys.length,
         statusBarEntryHtml: entries.some(e => /状态栏/.test(String(e.comment || '')) && /<(div|style)/i.test(String(e.content || ''))),
         hasStatusBarRegex,
+        statusBarPathHits: `${sb.hits}/${sb.total}`,
     };
     return {
         ok: problems.length === 0,

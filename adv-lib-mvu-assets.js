@@ -113,7 +113,8 @@ export function fixedMvuRegexes(statusBarHtml) {
             id: FIXED_MVU_REGEX_IDS[5],
             scriptName: '[美化]MVU状态栏',
             findRegex: '/<StatusPlaceHolderImpl\\/>/g',
-            replaceString: wrapHtml(statusBarHtml),
+            // 条目里留 <StatusPlaceHolderImpl/> 当锚；replaceString 必须把它剥掉，否则替换结果里又出现占位符（二次触发/漏文字）
+            replaceString: wrapHtml(String(statusBarHtml).replace(/<StatusPlaceHolderImpl\s*\/>/gi, '').trim()),
             placement: [2],
             markdownOnly: true,
             promptOnly: false,

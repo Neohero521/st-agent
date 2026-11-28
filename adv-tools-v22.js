@@ -150,119 +150,102 @@ function updateRuleYaml(chars) {
 /** 状态栏 HTML 兜底（模型没给状态栏时用）：纯 div + 占位符，不依赖前端正则 */
 /** 状态栏三种风格：golden(鎏金) / galgame(粉紫胶囊) / minimal(单行) */
 function statusBarHtml(chars, style) {
-    // style=standard → 写卡器 MVU_STATUS_BAR_TEMPLATE 原文（完整文档骨架，body/style 由 AI 填）
+    // standard → 写卡器 MVU_STATUS_BAR_TEMPLATE 原文（完整文档骨架，body/style 由 AI 填）
     if (String(style || '').toLowerCase() === 'standard') return WC_STATUS_TEMPLATE;
     const list = Array.isArray(chars) && chars.length ? chars : ['角色'];
-    const first = list[0];
-    const st = String(style || 'golden');
-
-    // 每个数值都走 Number 守卫：开局变量还是字符串占位词时进度条不会炸
-    const num = (v, d) => `Number(getvar("stat_data.${v}", { defaults: ${d} }) || 0)`;
-    const txt = (v, d) => `<%- getvar("stat_data.${v}", { defaults: "${d}" }) %>`;
-    const pct = (v) => `<%- Math.max(0, Math.min(100, ${num(v, 0)})) %>`;
-    const v0 = `stat_data.${first}`;
-
-    if (st === 'minimal') {
-        return [
-            '<div class="mvu-min">',
-            `<span class="mvu-min-t">${first}</span>`,
-            `<span class="mvu-min-i">♥ <%- ${num(`${first}.好感度`, 0)} %></span>`,
-            `<span class="mvu-min-i">${txt('世界.日期', '未知')} ${txt('世界.时间', '')}</span>`,
-            `<span class="mvu-min-i">${txt('世界.天气', '')}</span>`,
-            '</div>',
-            '<style>',
-            '.mvu-min{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:8px 12px;margin:6px 0;border-radius:10px;background:rgba(20,20,24,.72);border:1px solid rgba(212,175,55,.28);font-size:13px;color:#d8d3c4;line-height:1.5}',
-            '.mvu-min-t{color:#e8cf8a;font-weight:600}',
-            '.mvu-min-i{color:#a9a397;font-size:12px}',
-            '</style>',
-            '<StatusPlaceHolderImpl/>',
-        ].join('\n');
-    }
-
-    if (st === 'galgame') {
-        return [
-            '<div class="mvu-gal">',
-            '<style>',
-            '.mvu-gal{position:relative;margin:10px 0;padding:12px 14px;border-radius:18px;background:linear-gradient(135deg,rgba(46,26,58,.94),rgba(24,18,40,.94));border:1px solid rgba(255,158,214,.38);box-shadow:0 6px 22px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.08);color:#f4e9f5;font-size:13px;line-height:1.6;overflow:hidden}',
-            '.mvu-gal::before{content:"";position:absolute;inset:-40% -10% auto -10%;height:70%;background:radial-gradient(60% 90% at 30% 0%,rgba(255,148,203,.22),transparent 70%);pointer-events:none}',
-            '.mvu-gal-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}',
-            '.mvu-gal-ava{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#fff;background:linear-gradient(135deg,#ff8fc8,#a564ff);box-shadow:0 2px 10px rgba(255,143,200,.45);flex:none}',
-            '.mvu-gal-name{font-size:15px;font-weight:600;letter-spacing:.5px;color:#ffe7f6}',
-            '.mvu-gal-stage{margin-left:auto;font-size:11px;padding:2px 9px;border-radius:999px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);color:#ffd9f2}',
-            '.mvu-gal-aff{display:flex;align-items:center;gap:8px;margin-bottom:8px}',
-            '.mvu-gal-aff i{font-style:normal;font-size:11px;color:#c9a8e0;flex:none}',
-            '.mvu-gal-bar{flex:1;height:7px;border-radius:999px;background:rgba(255,255,255,.1);overflow:hidden}',
-            '.mvu-gal-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#ff9ad4,#b77bff);box-shadow:0 0 10px rgba(255,154,212,.6)}',
-            '.mvu-gal-aff b{font-size:12px;color:#ffc9e8;min-width:38px;text-align:right}',
-            '.mvu-gal-rows{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px}',
-            '.mvu-gal-row{display:flex;justify-content:space-between;gap:8px;padding:5px 9px;border-radius:10px;background:rgba(255,255,255,.055)}',
-            '.mvu-gal-row span{font-size:11px;color:#b9a8c9}',
-            '.mvu-gal-row b{font-size:12px;color:#fff3fb;font-weight:500}',
-            '@media (max-width:520px){.mvu-gal-rows{grid-template-columns:1fr}.mvu-gal{padding:10px 12px}}',
-            '</style>',
-            '<div class="mvu-gal-head">',
-            `<div class="mvu-gal-ava"><%- String(getvar("${v0}._头像字", { defaults: "${first.slice(0, 1)}" })) %></div>`,
-            `<div class="mvu-gal-name">${first}</div>`,
-            '<div class="mvu-gal-stage">',
-            txt(`${first}._关系阶段`, '泛泛之交'),
-            '</div>',
-            '</div>',
-            '<div class="mvu-gal-aff">',
-            '<i>好感度</i>',
-            `<div class="mvu-gal-bar"><div class="mvu-gal-fill" style="width:${pct(`${first}.好感度`)}%"></div></div>`,
-            `<b><%- ${num(`${first}.好感度`, 0)} %></b>`,
-            '</div>',
-            '<div class="mvu-gal-rows">',
-            `<div class="mvu-gal-row"><span>心情</span><b>${txt(`${first}.心情`, '平静')}</b></div>`,
-            `<div class="mvu-gal-row"><span>衣着</span><b>${txt(`${first}.衣着.上衣`, '未知')}</b></div>`,
-            `<div class="mvu-gal-row"><span>日期</span><b>${txt('世界.日期', '未知')} ${txt('世界.时间', '')}</b></div>`,
-            `<div class="mvu-gal-row"><span>天气</span><b>${txt('世界.天气', '晴')}</b></div>`,
-            '</div>',
-            '</div>',
-            '<StatusPlaceHolderImpl/>',
-        ].join('\n');
-    }
-
-    // golden 默认
+    const first = String(list[0]);
+    const raw = String(style || '').toLowerCase();
+    const st = ['golden', 'galgame', 'minimal'].indexOf(raw) >= 0 ? raw : 'golden';
+    // ★正则 replaceString 不执行 EJS。状态栏必须是自执行 JS 页，与教科书卡（陈天爱：0 个 <% %>、
+    //   14 个 $(、1 个 getAllVariables、监听 VARIABLE_UPDATE_ENDED）完全同构：
+    //   <!DOCTYPE html> + $(errorCatched(init)) + waitGlobalInitialized('Mvu') + getAllVariables + eventOn(...)
+    const THEME = {
+        golden: { bg: 'rgba(18,17,22,.92)', fg: '#e8dfc8', sub: '#a9a397', acc: '#d4af37', acc2: '#8c6b21', bd: 'rgba(212,175,55,.30)', r: '12px' },
+        galgame: { bg: 'linear-gradient(135deg,rgba(46,26,58,.94),rgba(24,18,40,.94))', fg: '#ffe7f6', sub: '#c9a8e0', acc: '#ff8fc8', acc2: '#a564ff', bd: 'rgba(255,158,214,.38)', r: '18px' },
+        minimal: { bg: 'rgba(20,20,24,.72)', fg: '#d8d3c4', sub: '#a9a397', acc: '#cbb46a', acc2: '#8a7a45', bd: 'rgba(212,175,55,.24)', r: '10px' },
+    }[st];
+    const NAME = JSON.stringify(first);
     return [
-        '<div class="mvu-gold">',
+        '<!DOCTYPE html>',
+        '<html lang="zh-CN">',
+        '<head>',
+        '<meta charset="UTF-8">',
         '<style>',
-        '.mvu-gold{position:relative;margin:10px 0;padding:13px 15px;border-radius:14px;background:linear-gradient(160deg,rgba(26,23,18,.96),rgba(14,13,11,.96));border:1px solid rgba(212,175,55,.42);box-shadow:0 8px 26px rgba(0,0,0,.5),inset 0 1px 0 rgba(232,207,138,.12);color:#e6ddc9;font-size:13px;line-height:1.6}',
-        '.mvu-gold::after{content:"";position:absolute;inset:0;border-radius:13px;box-shadow:inset 0 0 0 1px rgba(232,207,138,.1);pointer-events:none}',
-        '.mvu-gold-head{display:flex;align-items:baseline;gap:10px;padding-bottom:9px;margin-bottom:10px;border-bottom:1px solid rgba(212,175,55,.18)}',
-        '.mvu-gold-name{font-size:15px;font-weight:700;letter-spacing:1px;color:#e8cf8a;text-shadow:0 0 14px rgba(212,175,55,.28)}',
-        '.mvu-gold-stage{font-size:11px;letter-spacing:.5px;color:#a8975f}',
-        '.mvu-gold-stage::before{content:"◆";margin-right:4px;color:#8d7a3f}',
-        '.mvu-gold-rows{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 14px}',
-        '.mvu-gold-row{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:5px 0;border-bottom:1px dashed rgba(212,175,55,.13)}',
-        '.mvu-gold-row:last-child{border-bottom:0}',
-        '.mvu-gold-row i{font-style:normal;font-size:11px;letter-spacing:.5px;color:#8b8578;flex:none}',
-        '.mvu-gold-row b{font-size:12.5px;font-weight:600;color:#efe6d2;text-align:right}',
-        '.mvu-gold-aff{margin-top:10px;display:flex;align-items:center;gap:10px}',
-        '.mvu-gold-aff i{font-style:normal;font-size:11px;letter-spacing:.5px;color:#8b8578}',
-        '.mvu-gold-bar{flex:1;height:6px;border-radius:3px;background:linear-gradient(90deg,rgba(212,175,55,.08),rgba(212,175,55,.2));overflow:hidden}',
-        '.mvu-gold-fill{height:100%;background:linear-gradient(90deg,#8d6f2a,#f0d488,#b4913c);box-shadow:0 0 12px rgba(240,212,136,.55)}',
-        '.mvu-gold-aff b{font-size:12px;color:#f0d488;min-width:36px;text-align:right}',
-        '@media (max-width:520px){.mvu-gold-rows{grid-template-columns:1fr}}',
+        '  :root{--sb-bg:' + THEME.bg + ';--sb-fg:' + THEME.fg + ';--sb-sub:' + THEME.sub + ';--sb-acc:' + THEME.acc + ';--sb-acc2:' + THEME.acc2 + ';--sb-bd:' + THEME.bd + ';--sb-r:' + THEME.r + '}',
+        '  body{margin:0;padding:0;background:transparent;color:var(--sb-fg);font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}',
+        '  .sb{margin:8px 0;padding:12px 14px;border-radius:var(--sb-r);background:var(--sb-bg);border:1px solid var(--sb-bd);box-shadow:0 6px 20px rgba(0,0,0,.42);font-size:13px;line-height:1.6}',
+        '  .sb-head{display:flex;align-items:center;gap:9px;margin-bottom:9px}',
+        '  .sb-name{font-size:15px;font-weight:600;color:var(--sb-acc);letter-spacing:.5px}',
+        '  .sb-stage{margin-left:auto;font-size:11px;padding:2px 9px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid var(--sb-bd);color:var(--sb-fg);white-space:nowrap}',
+        '  .sb-aff{display:flex;align-items:center;gap:8px;margin-bottom:9px}',
+        '  .sb-aff i{font-style:normal;font-size:11px;color:var(--sb-sub);flex:none}',
+        '  .sb-bar{flex:1;height:7px;border-radius:999px;background:rgba(255,255,255,.1);overflow:hidden}',
+        '  .sb-fill{height:100%;width:0;border-radius:999px;background:linear-gradient(90deg,var(--sb-acc),var(--sb-acc2));transition:width .45s cubic-bezier(.22,1,.36,1)}',
+        '  .sb-val{font-size:12px;color:var(--sb-acc);min-width:40px;text-align:right}',
+        '  .sb-rows{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}',
+        '  .sb-row{display:flex;justify-content:space-between;gap:8px;padding:5px 9px;border-radius:9px;background:rgba(255,255,255,.05);min-width:0}',
+        '  .sb-row span{font-size:11px;color:var(--sb-sub);flex:none}',
+        '  .sb-row b{font-size:12px;font-weight:500;color:var(--sb-fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+        '  .sb-extra{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}',
+        '  .sb-chip{font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,.06);border:1px solid var(--sb-bd);color:var(--sb-sub)}',
+        '  @media (max-width:420px){.sb-rows{grid-template-columns:1fr}}',
         '</style>',
-        '<div class="mvu-gold-head">',
-        `<div class="mvu-gold-name">${first}</div>`,
-        '<div class="mvu-gold-stage">',
-        txt(`${first}._关系阶段`, '泛泛之交'),
+        '</head>',
+        '<body>',
+        '<div class="sb" id="sb-root">',
+        '  <div class="sb-head"><span class="sb-name" id="sb-name"></span><span class="sb-stage" id="sb-stage">—</span></div>',
+        '  <div class="sb-aff"><i>好感</i><div class="sb-bar"><div class="sb-fill" id="sb-fill"></div></div><b class="sb-val" id="sb-val">0</b></div>',
+        '  <div class="sb-rows">',
+        '    <div class="sb-row"><span>时间</span><b id="sb-time">—</b></div>',
+        '    <div class="sb-row"><span>地点</span><b id="sb-loc">—</b></div>',
+        '    <div class="sb-row"><span>心情</span><b id="sb-mood">—</b></div>',
+        '    <div class="sb-row"><span>衣着</span><b id="sb-cloth">—</b></div>',
+        '  </div>',
+        '  <div class="sb-extra" id="sb-extra"></div>',
         '</div>',
-        '</div>',
-        '<div class="mvu-gold-rows">',
-        `<div class="mvu-gold-row"><i>日期</i><b>${txt('世界.日期', '未知')} ${txt('世界.时间', '')}</b></div>`,
-        `<div class="mvu-gold-row"><i>天气</i><b>${txt('世界.天气', '晴')}</b></div>`,
-        `<div class="mvu-gold-row"><i>心情</i><b>${txt(`${first}.心情`, '平静')}</b></div>`,
-        `<div class="mvu-gold-row"><i>上衣</i><b>${txt(`${first}.衣着.上衣`, '未知')}</b></div>`,
-        '</div>',
-        '<div class="mvu-gold-aff">',
-        '<i>好感度</i>',
-        `<div class="mvu-gold-bar"><div class="mvu-gold-fill" style="width:${pct(`${first}.好感度`)}%"></div></div>`,
-        `<b><%- ${num(`${first}.好感度`, 0)} %></b>`,
-        '</div>',
-        '</div>',
+        '<script type="module">',
+        `const NAME = ${NAME};`,
+        'function one(obj, keys) { for (let i = 0; i < keys.length; i++) { const v = _.get(obj, keys[i]); if (v !== undefined && v !== null && v !== "") return v; } return undefined; }',
+        'function show(v, d) { if (v === undefined || v === null || v === "") return d; if (typeof v === "object") { const s = Object.values(v).filter(x => x !== null && x !== undefined && x !== "").join(" / "); return s || d; } return String(v); }',
+        'function render(vars) {',
+        '  const all = vars || getAllVariables();',
+        '  const sd = _.get(all, "stat_data") || {};',
+        '  const ch = _.get(sd, NAME) || {};',
+        '  const wd = _.get(sd, "世界") || {};',
+        '  const aff = Number(_.get(ch, "好感度", _.get(ch, "信任", _.get(sd, "好感度", 0)))) || 0;',
+        '  document.getElementById("sb-name").textContent = NAME;',
+        '  document.getElementById("sb-val").textContent = String(aff);',
+        '  document.getElementById("sb-fill").style.width = Math.max(0, Math.min(100, aff)) + "%";',
+        '  document.getElementById("sb-stage").textContent = show(one(ch, ["_关系阶段", "关系阶段"]), "—");',
+        '  document.getElementById("sb-time").textContent = show(one(wd, ["时间", "日期"]), show(one(sd, ["时间", "当前时间"]), "—"));',
+        '  document.getElementById("sb-loc").textContent = show(one(wd, ["地点", "当前位置"]), show(one(sd, ["地点"]), "—"));',
+        '  document.getElementById("sb-mood").textContent = show(one(ch, ["心情", "情绪"]), "—");',
+        '  document.getElementById("sb-cloth").textContent = show(one(ch, ["衣着"]), "—");',
+        '  const used = ["好感度", "信任", "心情", "情绪", "衣着", "_关系阶段", "关系阶段", "时间", "地点", "当前动作", "当前身体状态", "内心OS", "对男友感情", "心动值", "防备心"];',
+        '  const box = document.getElementById("sb-extra");',
+        '  box.innerHTML = "";',
+        '  Object.keys(ch).forEach(function (k) {',
+        '    if (used.indexOf(k) >= 0) return;',
+        '    const v = _.get(ch, k);',
+        '    if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") return;',
+        '    const s = show(v, "");',
+        '    if (!s) return;',
+        '    const el = document.createElement("span");',
+        '    el.className = "sb-chip";',
+        '    el.textContent = k + " " + s;',
+        '    box.appendChild(el);',
+        '  });',
+        '}',
+        'async function init() {',
+        '  await waitGlobalInitialized("Mvu");',
+        '  await waitUntil(function () { return _.has(getVariables({ type: "message" }), "stat_data"); });',
+        '  render();',
+        '  eventOn(Mvu.events.VARIABLE_UPDATE_ENDED, function (v) { render(v); });',
+        '}',
+        '$(errorCatched(init));',
+        '</script>',
+        '</body>',
+        '</html>',
         '<StatusPlaceHolderImpl/>',
     ].join('\n');
 }
@@ -276,7 +259,6 @@ const MVU_SPEC = [
     '[mvu_update]变量输出格式强调',
     '变量列表',
     '<状态栏>占位符提醒',
-    '状态栏',
 ].map(comment => {
     const tpl = entryTemplate(comment) || {};
     return Object.assign({ comment, meta: tpl }, {
@@ -596,7 +578,13 @@ export const TOOLS = [
             if (!book) throw new Error('mvu.build 需要 book（世界书名）');
             const chars = a.chars || [];
             // 正文默认值 = 写卡器固定生成（不传就用它，传了也按条目规范归一，与写卡器 _tavernWriteMvuEntries 同口径）
-            const initvar = String(a.initvar || '').trim() || wcInitVarYaml(chars);
+            let initvar = String(a.initvar || '').trim() || wcInitVarYaml(chars);
+            // 写卡器口径：InitVar 顶层就是变量根（陈天爱: / 世界:）。
+            // AI 常写成 stat_data: 包一层，那会让变量变成 stat_data.stat_data.X，schema 与状态栏全对不上 —— 这里直接纠正。
+            if (/^\s*stat_data\s*:\s*$/m.test(initvar.split('\n')[0] || '')) {
+                const lines = initvar.split('\n');
+                initvar = lines.slice(1).map(l => l.replace(/^ {2}/, '')).join('\n').trim();
+            }
             const rule = String(a.update_rule || '').trim() || wcVarUpdateRule(chars);
             const bar = String(a.status_bar || '').trim() || statusBarHtml(chars);
             const rawContents = {
@@ -606,7 +594,6 @@ export const TOOLS = [
                 '[mvu_update]变量输出格式强调': wcVarOutputEmphasis(),
                 变量列表: wcVarListContent(),
                 '<状态栏>占位符提醒': wcStatusPlaceholder(),
-                状态栏: bar,
             };
             const contents = {};
             for (const [k, v] of Object.entries(rawContents)) {
@@ -620,7 +607,7 @@ export const TOOLS = [
                 const out = await writeEntry(book, name, content, spec);
                 done.push({ comment: name, uid: out.uid, enabled: spec.enabled, position: spec.position, depth: spec.depth, order: spec.order, chars: String(content).length });
             }
-            return { ok: true, book, written: done.length, entries: done, note: '条目不生效时先确认 MagVarUpdate 已安装、schema 脚本已注册' };
+            return { ok: true, book, written: done.length, entries: done, status_bar_html_bytes: bar.length, note: '状态栏 HTML 不进条目（教科书卡只有「<状态栏>占位符提醒」，HTML 走正则 replaceString）：直接调 mvu.statusbar 写正则；条目不生效时先确认 MagVarUpdate 已安装、schema 脚本已注册' };
         },
     },
     {
@@ -765,11 +752,14 @@ export const TOOLS = [
             const local = (ctx.characters || []).find(x => x.avatar === av);
             if (!local) throw new Error(`找不到角色卡「${av}」`);
             if (!a.schema || !String(a.schema).trim()) throw new Error('mvu.schema 需要 schema 源码');
-            const code = normalizeSchema(a.schema);
+            let code = normalizeSchema(a.schema);
             if (!/z\.object/.test(code)) throw new Error('schema 里没有 z.object：确认这是 zod 结构定义');
+            // 模型经常把数值写成字符串（"85"），z.number() 会直接校验失败 → 照抄教科书卡统一 coerce
+            const coerced = (code.match(/z\.number\(\)/g) || []).length;
+            if (coerced) code = code.replace(/z\.number\(\)/g, 'z.coerce.number()');
             const item = { type: 'script', enabled: true, name: '变量结构', id: 'mvu-schema', content: code, info: '自动生成的 MVU 变量结构脚本。', button: { enabled: true, buttons: [] }, data: {}, export_with: { data: true, button: true } };
             const out = await putScript(ctx, local, av, item);
-            return { ok: true, avatar: av, id: 'mvu-schema', bytes: code.length, created: out.created, scripts: out.scripts, registered: /registerMvuSchema\s*\(\s*Schema\s*\)/.test(code), note: '脚本头尾按写卡器模板归一（import registerMvuSchema → export const Schema = z.object({...}) → $(() => registerMvuSchema(Schema))）；MVU 生效还需要本体脚本：调 mvu.runtime 写 bundle.js 那一份（id 961f366d-e403-45c2-8155-3d14ec86de53），正则调 mvu.statusbar' };
+            return { ok: true, avatar: av, id: 'mvu-schema', bytes: code.length, created: out.created, scripts: out.scripts, coerced_from_plain_number: coerced, registered: /registerMvuSchema\s*\(\s*Schema\s*\)/.test(code), note: '脚本头尾按写卡器模板归一（import registerMvuSchema → export const Schema = z.object({...}) → $(() => registerMvuSchema(Schema))）；MVU 生效还需要本体脚本：调 mvu.runtime 写 bundle.js 那一份（id 961f366d-e403-45c2-8155-3d14ec86de53），正则调 mvu.statusbar' };
         },
     },
     {
@@ -819,10 +809,32 @@ export const TOOLS = [
             if (!a.book) throw new Error('mvu.statusbar 需要 book');
             const chars = Array.isArray(a.chars) && a.chars.length ? a.chars : [String(charBy(a.card)?.name || '角色')];
             // 照抄写卡器：条目里存纯 HTML；正则里由 fixedMvuRegexes 自动 ```html 包裹
-            const html = unwrapHtml(String(a.html || '').trim() || statusBarHtml(chars, a.style));
+            let html = unwrapHtml(String(a.html || '').trim() || statusBarHtml(chars, a.style));
+            if (/<%[\s\S]*?%>/.test(html)) {
+                throw new Error('状态栏 HTML 里出现了 EJS 模板语法 <% %>：正则 replaceString 不执行 EJS，玩家会看到 <%- getvar(…) %> 源码。状态栏必须是自执行 JS 页（<!DOCTYPE html> + $(() => { await waitGlobalInitialized("Mvu"); getAllVariables() … }) + eventOn(VARIABLE_UPDATE_ENDED, render)）');
+            }
             if (!/StatusPlaceHolderImpl/.test(html)) throw new Error('状态栏 HTML 里必须保留 <StatusPlaceHolderImpl/> 占位符');
+            if (!/<\/html>/i.test(html)) html = ensureHtmlDoc(html);
             const spec = { position: 2, depth: 2, order: 35, constant: false, enabled: true };
-            const written = await writeEntry(a.book, '状态栏', html, spec);
+            // 教科书卡（陈天爱）里没有「状态栏」HTML 条目：条目只放「<状态栏>占位符提醒」，
+            // HTML 只在正则 replaceString。这里按规范写提醒条目 + 清掉历史误写的 HTML 条目。
+            const phTpl = entryTemplate('<状态栏>占位符提醒') || {};
+            const phWritten = await writeEntry(a.book, '<状态栏>占位符提醒', wcStatusPlaceholder(), {
+                position: phTpl.position === undefined ? 4 : phTpl.position,
+                depth: phTpl.depth === undefined ? 0 : phTpl.depth,
+                order: phTpl.order === undefined ? 250 : phTpl.order,
+                constant: true,
+                enabled: true,
+            });
+            let staleCleared = false;
+            try {
+                const got = await getEntries({ name: a.book, limit: 500 });
+                const stale = ((got && got.entries) || []).find(e => String(e.comment || '').trim() === '状态栏' && /<(div|style|script|!DOCTYPE)/i.test(String(e.content || '')));
+                if (stale) {
+                    await writeEntry(a.book, '状态栏', '', { position: 2, depth: 2, order: 35, constant: false, enabled: false });
+                    staleCleared = true;
+                }
+            } catch (e) { /* 清历史条目失败不影响主流程 */ }
 
             // 正则写角色卡（scoped）：MVU 状态栏只属于这张卡，写全局会把别卡的占位符也一起换掉
             const ch = charBy(a.card);
@@ -851,7 +863,9 @@ export const TOOLS = [
             return {
                 ok: problems.length === 0,
                 book: a.book,
-                entry_uid: written.uid,
+                entry_uid: phWritten.uid,
+                placeholder_entry: '<状态栏>占位符提醒',
+                stale_status_entry_cleared: staleCleared,
                 regex_scope: 'scoped',
                 character: ch.avatar,
                 regex: '写卡器 6 条固定正则（思维链/变量剥离/变量完成/变量更新中/隐藏占位/状态栏）' + (hide ? '' : '（enable_hide=false，跳过隐藏占位）'),
