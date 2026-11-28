@@ -43,7 +43,59 @@ export async function getEntries({ name, uid, keyword, limit = 50 } = {}) {
     return { names: data.name === undefined ? name : name, count: list.length, entries: list.slice(0, Number(limit) || 50) };
 }
 
-export async function setEntry({ name, uid, keys, content, comment, order, position, depth, probability, constant, enabled, secondary_keys, role }) {
+/**
+ * 写卡器条目 meta（snake_case，照抄 ENTRY_TEMPLATES）→ 酒馆 entry 字段（camelCase）。
+ * 只应用模板里真实给出的键，没给的保持原值，避免把 AI 手写的配置覆盖成默认。
+ */
+const META_FIELD_MAP = {
+    constant: 'constant',
+    selective: 'selective',
+    position: 'position',
+    depth: 'depth',
+    order: 'order',
+    insertion_order: 'order',
+    enabled: 'enabled',
+    prevent_recursion: 'preventRecursion',
+    exclude_recursion: 'excludeRecursion',
+    delay_until_recursion: 'delayUntilRecursion',
+    cooldown: 'cooldown',
+    delay: 'delay',
+    sticky: 'sticky',
+    use_regex: 'useRegex',
+    match_whole_words: 'matchWholeWords',
+    scan_depth: 'scanDepth',
+    selectiveLogic: 'selectiveLogic',
+    probability: 'probability',
+    useProbability: 'useProbability',
+    group: 'group',
+    group_weight: 'groupWeight',
+    keys: 'key',
+    secondary_keys: 'keysecondary',
+};
+
+export function applyEntryMeta(target, meta) {
+    if (!meta || typeof meta !== 'object') return target;
+    for (const [k, v] of Object.entries(meta)) {
+        const field = META_FIELD_MAP[k];
+        if (!field) continue;
+        if (v === undefined) continue;
+        if (field === 'enabled') { target.disable = !v; continue; }
+        if (field === 'order') { if (v !== null) target.order = Number(v); continue; }
+        if (field === 'depth') { if (v !== null) target.depth = Number(v); continue; }
+        if (field === 'position') { if (v !== null) target.position = Number(v); continue; }
+        if (field === 'probability') { if (v !== null) target.probability = Number(v); continue; }
+        if (field === 'groupWeight') { if (v !== null) target.groupWeight = Number(v); continue; }
+        if (field === 'key' || field === 'keysecondary') {
+            const arr = Array.isArray(v) ? v : String(v || '').split(/[,，]/).map(s => s.trim()).filter(Boolean);
+            target[field] = arr;
+            continue;
+        }
+        target[field] = v === null ? null : v;
+    }
+    return target;
+}
+
+export async function setEntry({ name, uid, keys, content, comment, order, position, depth, probability, constant, enabled, secondary_keys, role, meta }) {
     const data = await loadBook(name);
     let target;
     if (uid !== undefined && uid !== null && uid !== '' && data.entries[uid]) {
@@ -69,6 +121,7 @@ export async function setEntry({ name, uid, keys, content, comment, order, posit
     if (constant !== undefined) target.constant = !!constant;
     if (enabled !== undefined) target.disable = !enabled;
     if (role !== undefined) target.role = Number(role);
+    if (meta) applyEntryMeta(target, meta);
     // 补齐酒馆要求的默认字段，避免新条目在 UI 里显示异常
     if (target.key === undefined) target.key = [];
     if (target.keysecondary === undefined) target.keysecondary = [];

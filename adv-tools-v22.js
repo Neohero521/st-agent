@@ -15,6 +15,9 @@ import { toPlacement } from './tools-set-c.js';
 import { charBy, scopedScripts, upsertScoped, allRegexes, scopedAllowed } from './adv-lib-regex.js';
 import { writeCardExtensions } from './adv-lib-card.js';
 import { fixedMvuRegexes, wrapHtml, unwrapHtml, buildSchemaScript, MVU_RUNTIME_ID, MVU_SCHEMA_ID, FIXED_MVU_REGEX_IDS } from './adv-lib-mvu-assets.js';
+import { normalizeEntryComment, entryTemplate, normalizeEntryContent, wcInitVarYaml, wcVarUpdateRule, wcVarOutputFormat, wcVarOutputEmphasis, wcStatusPlaceholder, wcVarListContent } from './adv-lib-wc-entries.js';
+import { WC_STATUS_TEMPLATE, mockScript, ensureHtmlDoc, injectMock, parseInitVarYaml } from './adv-lib-mvu-preview.js';
+import { FE_CHAT_BASE_HTML, feChatHtml } from './adv-lib-fe-template.js';
 import { listSpill, readSpill, setTodos, listSessionsBrief, snapshotSession, usageOf } from './index-sessions.js';
 import { getGoal, changeGoal } from './index-goal.js';
 
@@ -141,6 +144,8 @@ function updateRuleYaml(chars) {
 /** 状态栏 HTML 兜底（模型没给状态栏时用）：纯 div + 占位符，不依赖前端正则 */
 /** 状态栏三种风格：golden(鎏金) / galgame(粉紫胶囊) / minimal(单行) */
 function statusBarHtml(chars, style) {
+    // style=standard → 写卡器 MVU_STATUS_BAR_TEMPLATE 原文（完整文档骨架，body/style 由 AI 填）
+    if (String(style || '').toLowerCase() === 'standard') return WC_STATUS_TEMPLATE;
     const list = Array.isArray(chars) && chars.length ? chars : ['角色'];
     const first = list[0];
     const st = String(style || 'golden');
@@ -257,15 +262,25 @@ function statusBarHtml(chars, style) {
 }
 
 /** 8 条 MVU 条目的配置：position / depth / order / constant / enabled 一律以规范为准 */
+// 7 条固定条目的 meta 直接取自写卡器 ENTRY_TEMPLATES（position/depth/order/constant/enabled 逐字段一致）
 const MVU_SPEC = [
-    { comment: '[InitVar]初始变量', position: 0, depth: 4, order: 100, constant: false, enabled: false },
-    { comment: '[mvu_update]变量更新规则', position: 4, depth: 0, order: 200, constant: true, enabled: true },
-    { comment: '[mvu_update]变量输出格式', position: 4, depth: 0, order: 200, constant: true, enabled: true },
-    { comment: '[mvu_update]变量输出格式强调', position: 4, depth: 0, order: 200, constant: true, enabled: false },
-    { comment: '变量列表', position: 4, depth: 1, order: 200, constant: true, enabled: true },
-    { comment: '<状态栏>占位符提醒', position: 4, depth: 0, order: 200, constant: true, enabled: true },
-    { comment: '状态栏', position: 2, depth: 2, order: 35, constant: false, enabled: true },
-];
+    '[InitVar]初始变量',
+    '[mvu_update]变量更新规则',
+    '[mvu_update]变量输出格式',
+    '[mvu_update]变量输出格式强调',
+    '变量列表',
+    '<状态栏>占位符提醒',
+    '状态栏',
+].map(comment => {
+    const tpl = entryTemplate(comment) || {};
+    return Object.assign({ comment, meta: tpl }, {
+        position: tpl.position === undefined ? 4 : tpl.position,
+        depth: tpl.depth === undefined ? 0 : tpl.depth,
+        order: tpl.order === undefined ? 200 : tpl.order,
+        constant: tpl.constant === undefined ? true : tpl.constant,
+        enabled: tpl.enabled === undefined ? true : tpl.enabled,
+    });
+});
 
 /* ------------------------------ 公共小工具 ------------------------------ */
 
@@ -376,6 +391,7 @@ async function writeEntry(book, comment, content, cfg) {
         depth: cfg.depth,
         constant: cfg.constant,
         enabled: cfg.enabled !== false,
+        meta: cfg.meta || null,
     };
     if (hit) args.uid = hit.uid;
     return await setEntry(args);
@@ -501,7 +517,7 @@ export const TOOLS = [
                 var_list: VAR_LIST,
                 placeholder: PLACEHOLDER,
                 status_bar: statusBarHtml(chars, a.style),
-                status_bar_styles: ['golden', 'galgame', 'minimal'].map(x => ({ style: x, html: statusBarHtml(chars, x) })),
+                status_bar_styles: ['standard', 'golden', 'galgame', 'minimal'].map(x => ({ style: x, html: statusBarHtml(chars, x) })),
                 rules: [
                     'InitVar 用 YAML，键名=中文变量名；数字写 0、布尔写 false、字符串写占位词、对象写 {}，不要编剧情数值。',
                     '`_` 开头=只读（AI 可见不可改）；`$` 开头=派生显示（AI 不可见，只给脚本/EJS 用）。',
@@ -516,7 +532,7 @@ export const TOOLS = [
     {
         name: 'mvu.build',
         kind: 'write',
-        desc: '一次性把 MVU 变量系统的 7 条世界书条目写进指定世界书（InitVar / 更新规则 / 输出格式 / 格式强调 / 变量列表 / 占位提醒 / 状态栏），配置全部按规范强制（position、depth、order、constant、enabled），同名条目会被更新而不是重复新建。initvar / update_rule / status_bar 不传则用规范骨架。',
+        desc: '把 MVU 的 7 条世界书条目一次写全（照抄写卡器 ENTRY_TEMPLATES 与正文生成，不做自创）：条目名归一为标准名（[InitVar]初始变量 / [mvu_update]变量更新规则 / [mvu_update]变量输出格式 / [mvu_update]变量输出格式强调 / 变量列表 / <状态栏>占位符提醒 / 状态栏），meta 逐字段照模板（InitVar position=0 order=100 enabled=false、三条 mvu_update position=4 depth=0 order=200、变量列表 depth=1、占位提醒 order=250 带 keys、状态栏 position=2 depth=2 order=35 触发式），正文默认用写卡器固定生成（变量列表只留 --- + <status_current_variable>{{format_message_variable::stat_data}}</…>，输出格式/强调/占位提醒强制重建，InitVar 与更新规则用它的骨架）。同名条目更新不新建。',
         params: {
             book: 'string 世界书名（先用 world.list 查）',
             chars: 'array 角色名列表',
@@ -528,23 +544,30 @@ export const TOOLS = [
             const book = a.book;
             if (!book) throw new Error('mvu.build 需要 book（世界书名）');
             const chars = a.chars || [];
-            const initvar = String(a.initvar || '').trim() || initVarYaml(chars);
-            const rule = String(a.update_rule || '').trim() || updateRuleYaml(chars);
+            // 正文默认值 = 写卡器固定生成（不传就用它，传了也按条目规范归一，与写卡器 _tavernWriteMvuEntries 同口径）
+            const initvar = String(a.initvar || '').trim() || wcInitVarYaml(chars);
+            const rule = String(a.update_rule || '').trim() || wcVarUpdateRule(chars);
             const bar = String(a.status_bar || '').trim() || statusBarHtml(chars);
-            const contents = {
+            const rawContents = {
                 '[InitVar]初始变量': initvar,
                 '[mvu_update]变量更新规则': rule,
-                '[mvu_update]变量输出格式': OUTPUT_FORMAT,
-                '[mvu_update]变量输出格式强调': OUTPUT_EMPHASIS,
-                变量列表: VAR_LIST,
-                '<状态栏>占位符提醒': PLACEHOLDER,
+                '[mvu_update]变量输出格式': wcVarOutputFormat(),
+                '[mvu_update]变量输出格式强调': wcVarOutputEmphasis(),
+                变量列表: wcVarListContent(),
+                '<状态栏>占位符提醒': wcStatusPlaceholder(),
                 状态栏: bar,
             };
+            const contents = {};
+            for (const [k, v] of Object.entries(rawContents)) {
+                const name = normalizeEntryComment(k) || k;
+                contents[name] = normalizeEntryContent(name, v);
+            }
             const done = [];
             for (const spec of MVU_SPEC) {
-                const content = contents[spec.comment];
-                const out = await writeEntry(book, spec.comment, content, spec);
-                done.push({ comment: spec.comment, uid: out.uid, enabled: spec.enabled, chars: String(content).length });
+                const name = normalizeEntryComment(spec.comment) || spec.comment;
+                const content = contents[name];
+                const out = await writeEntry(book, name, content, spec);
+                done.push({ comment: name, uid: out.uid, enabled: spec.enabled, position: spec.position, depth: spec.depth, order: spec.order, chars: String(content).length });
             }
             return { ok: true, book, written: done.length, entries: done, note: '条目不生效时先确认 MagVarUpdate 已安装、schema 脚本已注册' };
         },
@@ -785,6 +808,88 @@ export const TOOLS = [
                 regex_total_in_card: after.length,
                 problems,
                 bytes: html.length,
+            };
+        },
+    },
+    {
+        name: 'mvu.preview',
+        kind: 'read',
+        desc: '状态栏预览：把状态栏 HTML 真的跑起来看。照抄写卡器 showMvuStatusBarPreview —— 自动补全 HTML 骨架（AI 只给片段也能跑）、在 <head> 最前面注入 mock（$ / _ / getVariables / getAllVariables / waitUntil / waitGlobalInitialized / eventOn / Mvu / getvar / print）、把 [InitVar] 条目 YAML 解析成 stat_data 当假数据。返回可直接塞 iframe srcdoc 的完整文档，不写盘。状态栏白屏/不显示变量时先跑这个：能在浏览器里跑，问题就在卡里；跑不起来，问题在 HTML。',
+        params: {
+            book: 'string 可选，世界书名（读 [InitVar] 当假数据；不传就不解析）',
+            card: 'string 可选，头像文件名（读卡里 mvu-status-bar 正则的 replaceString 当 HTML）',
+            html: 'string 可选，直接给状态栏 HTML（优先于卡里那条）',
+            stat_data: 'object 可选，自定义假变量（优先级最高）',
+        },
+        run: async a => {
+            const ctx = c();
+            let html = String(a.html || '').trim();
+            let source = 'html 参数';
+            if (!html) {
+                const ch = charBy(a.card) || (ctx.characterId ? charBy(ctx.characterId) : null);
+                const rx = ch ? scopedScripts(ch).find(r => r && r.id === 'mvu-status-bar') : null;
+                if (rx) { html = String(rx.replaceString || '').trim(); source = '卡内 [美化]MVU状态栏 正则'; }
+            }
+            if (!html) { html = WC_STATUS_TEMPLATE; source = '写卡器标准模板（卡里还没有状态栏正则）'; }
+
+            let data = a.stat_data && typeof a.stat_data === 'object' ? a.stat_data : null;
+            let dataSource = data ? 'stat_data 参数' : '';
+            if (!data && a.book) {
+                try {
+                    const got = await getEntries({ name: a.book, limit: 500 });
+                    const iv = (got.entries || []).find(e => String(e.comment || '').toLowerCase().indexOf('[initvar]') === 0);
+                    if (iv && String(iv.content || '').trim()) {
+                        data = parseInitVarYaml(iv.content);
+                        dataSource = `[InitVar] 条目（uid=${iv.uid}）`;
+                    }
+                } catch { /* 读不到就退示例数据 */ }
+            }
+            if (!data || !Object.keys(data).length) {
+                data = { 世界: { 当前日期: '2025-07-22', 当前时间: '09:00', 天气: '晴' }, 主角: { 好感度: 30, 心情: '平静', 物品: [] } };
+                dataSource = '示例假数据';
+            }
+            const doc = injectMock(html, data);
+            return {
+                ok: true,
+                source,
+                data_source: dataSource,
+                bytes: doc.length,
+                skeleton_fixed: ensureHtmlDoc(html) !== String(html || '').trim(),
+                html: doc,
+                note: '把 html 字段整段塞进 <iframe sandbox="allow-scripts" srcdoc="…"> 就能看到真实渲染；这里只 mock 了读变量，不 mock 写变量',
+            };
+        },
+    },
+    {
+        name: 'fe.chat',
+        kind: 'write',
+        desc: '0 层卡前端聊天界面（照抄写卡器 FE_CHAT_BASE_HTML）：气泡式聊天 + 静默调模型（window.parent.TavernHelper.generate，带 should_stream / disable_extras / stop_everything）+ 消息只在前端 iframe 渲染（state.messages，不建酒馆楼层）+ Enter 发送 / Shift+Enter 换行 + 流式回显。不传 book 只回预览片段；传 book 就把整份 HTML 写进世界书条目（position=0 常驻，order=240），由卡内前端脚本注入。',
+        params: {
+            title: 'string 可选，<title> 文案（默认「聊天界面」）',
+            char: 'string 可选，角色名（只加在标题后缀）',
+            book: 'string 可选，世界书名；给了就把整份 HTML 落成条目',
+            comment: 'string 可选，条目名（默认 [前端]聊天界面）',
+            preview_chars: 'number 可选，返回片段长度，默认 600',
+        },
+        run: async a => {
+            const html = feChatHtml({ title: a.title, char: a.char });
+            const n = Math.max(200, Math.min(2000, Number(a.preview_chars) || 600));
+            let written = null;
+            if (a.book) {
+                const comment = normalizeEntryComment(String(a.comment || '[前端]聊天界面')) || '[前端]聊天界面';
+                const out = await writeEntry(a.book, comment, html, { position: 0, depth: 0, order: 240, constant: true, enabled: true });
+                written = { book: a.book, comment, uid: out.uid };
+            }
+            return {
+                ok: true,
+                bytes: html.length,
+                lines: html.split('\n').length,
+                written,
+                skeleton: ['callParentApi', 'sendMessage', 'renderMessage', 'state.messages', 'should_stream', 'stop_everything'].filter(k => html.indexOf(k) >= 0),
+                preview: html.slice(0, n),
+                note: written
+                    ? '整份已落盘到世界书；前端注入方式：createScriptIdIframe() 或 iframe srcdoc 指向该条目内容'
+                    : '传 book 才会落盘；现在是预览片段，需要整份就带 book 再调一次',
             };
         },
     },
