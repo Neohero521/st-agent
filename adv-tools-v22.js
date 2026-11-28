@@ -83,6 +83,7 @@ function initVarYaml(chars) {
         lines.push('    上衣: 未知');
         lines.push('    下装: 未知');
         lines.push('  _关系阶段: 泛泛之交');
+        lines.push('  _头像字: ' + String(name).slice(0, 1));
     }
     if (!list.includes('主角')) {
         lines.push('主角:');
@@ -136,13 +137,118 @@ function updateRuleYaml(chars) {
 }
 
 /** 状态栏 HTML 兜底（模型没给状态栏时用）：纯 div + 占位符，不依赖前端正则 */
-function statusBarHtml(chars) {
-    const first = (Array.isArray(chars) && chars[0]) || '角色';
+/** 状态栏三种风格：golden(鎏金) / galgame(粉紫胶囊) / minimal(单行) */
+function statusBarHtml(chars, style) {
+    const list = Array.isArray(chars) && chars.length ? chars : ['角色'];
+    const first = list[0];
+    const st = String(style || 'golden');
+
+    // 每个数值都走 Number 守卫：开局变量还是字符串占位词时进度条不会炸
+    const num = (v, d) => `Number(getvar("stat_data.${v}", { defaults: ${d} }) || 0)`;
+    const txt = (v, d) => `<%- getvar("stat_data.${v}", { defaults: "${d}" }) %>`;
+    const pct = (v) => `<%- Math.max(0, Math.min(100, ${num(v, 0)})) %>`;
+    const v0 = `stat_data.${first}`;
+
+    if (st === 'minimal') {
+        return [
+            '<div class="mvu-min">',
+            `<span class="mvu-min-t">${first}</span>`,
+            `<span class="mvu-min-i">♥ <%- ${num(`${first}.好感度`, 0)} %></span>`,
+            `<span class="mvu-min-i">${txt('世界.日期', '未知')} ${txt('世界.时间', '')}</span>`,
+            `<span class="mvu-min-i">${txt('世界.天气', '')}</span>`,
+            '</div>',
+            '<style>',
+            '.mvu-min{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:8px 12px;margin:6px 0;border-radius:10px;background:rgba(20,20,24,.72);border:1px solid rgba(212,175,55,.28);font-size:13px;color:#d8d3c4;line-height:1.5}',
+            '.mvu-min-t{color:#e8cf8a;font-weight:600}',
+            '.mvu-min-i{color:#a9a397;font-size:12px}',
+            '</style>',
+            '<StatusPlaceHolderImpl/>',
+        ].join('\n');
+    }
+
+    if (st === 'galgame') {
+        return [
+            '<div class="mvu-gal">',
+            '<style>',
+            '.mvu-gal{position:relative;margin:10px 0;padding:12px 14px;border-radius:18px;background:linear-gradient(135deg,rgba(46,26,58,.94),rgba(24,18,40,.94));border:1px solid rgba(255,158,214,.38);box-shadow:0 6px 22px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.08);color:#f4e9f5;font-size:13px;line-height:1.6;overflow:hidden}',
+            '.mvu-gal::before{content:"";position:absolute;inset:-40% -10% auto -10%;height:70%;background:radial-gradient(60% 90% at 30% 0%,rgba(255,148,203,.22),transparent 70%);pointer-events:none}',
+            '.mvu-gal-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}',
+            '.mvu-gal-ava{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#fff;background:linear-gradient(135deg,#ff8fc8,#a564ff);box-shadow:0 2px 10px rgba(255,143,200,.45);flex:none}',
+            '.mvu-gal-name{font-size:15px;font-weight:600;letter-spacing:.5px;color:#ffe7f6}',
+            '.mvu-gal-stage{margin-left:auto;font-size:11px;padding:2px 9px;border-radius:999px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);color:#ffd9f2}',
+            '.mvu-gal-aff{display:flex;align-items:center;gap:8px;margin-bottom:8px}',
+            '.mvu-gal-aff i{font-style:normal;font-size:11px;color:#c9a8e0;flex:none}',
+            '.mvu-gal-bar{flex:1;height:7px;border-radius:999px;background:rgba(255,255,255,.1);overflow:hidden}',
+            '.mvu-gal-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#ff9ad4,#b77bff);box-shadow:0 0 10px rgba(255,154,212,.6)}',
+            '.mvu-gal-aff b{font-size:12px;color:#ffc9e8;min-width:38px;text-align:right}',
+            '.mvu-gal-rows{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px}',
+            '.mvu-gal-row{display:flex;justify-content:space-between;gap:8px;padding:5px 9px;border-radius:10px;background:rgba(255,255,255,.055)}',
+            '.mvu-gal-row span{font-size:11px;color:#b9a8c9}',
+            '.mvu-gal-row b{font-size:12px;color:#fff3fb;font-weight:500}',
+            '@media (max-width:520px){.mvu-gal-rows{grid-template-columns:1fr}.mvu-gal{padding:10px 12px}}',
+            '</style>',
+            '<div class="mvu-gal-head">',
+            `<div class="mvu-gal-ava"><%- String(getvar("${v0}._头像字", { defaults: "${first.slice(0, 1)}" })) %></div>`,
+            `<div class="mvu-gal-name">${first}</div>`,
+            '<div class="mvu-gal-stage">',
+            txt(`${first}._关系阶段`, '泛泛之交'),
+            '</div>',
+            '</div>',
+            '<div class="mvu-gal-aff">',
+            '<i>好感度</i>',
+            `<div class="mvu-gal-bar"><div class="mvu-gal-fill" style="width:${pct(`${first}.好感度`)}%"></div></div>`,
+            `<b><%- ${num(`${first}.好感度`, 0)} %></b>`,
+            '</div>',
+            '<div class="mvu-gal-rows">',
+            `<div class="mvu-gal-row"><span>心情</span><b>${txt(`${first}.心情`, '平静')}</b></div>`,
+            `<div class="mvu-gal-row"><span>衣着</span><b>${txt(`${first}.衣着.上衣`, '未知')}</b></div>`,
+            `<div class="mvu-gal-row"><span>日期</span><b>${txt('世界.日期', '未知')} ${txt('世界.时间', '')}</b></div>`,
+            `<div class="mvu-gal-row"><span>天气</span><b>${txt('世界.天气', '晴')}</b></div>`,
+            '</div>',
+            '</div>',
+            '<StatusPlaceHolderImpl/>',
+        ].join('\n');
+    }
+
+    // golden 默认
     return [
-        '<div class="mvustatus">',
-        '  <div class="mvustatus-title">' + first + '</div>',
-        '  <div class="mvustatus-row"><span>世界</span><b><%- getvar("stat_data.世界.日期", { defaults: "未知" }) %> <%- getvar("stat_data.世界.时间", { defaults: "" }) %></b></div>',
-        '  <div class="mvustatus-row"><span>好感度</span><b><%- getvar("stat_data.' + first + '.好感度", { defaults: 0 }) %></b></div>',
+        '<div class="mvu-gold">',
+        '<style>',
+        '.mvu-gold{position:relative;margin:10px 0;padding:13px 15px;border-radius:14px;background:linear-gradient(160deg,rgba(26,23,18,.96),rgba(14,13,11,.96));border:1px solid rgba(212,175,55,.42);box-shadow:0 8px 26px rgba(0,0,0,.5),inset 0 1px 0 rgba(232,207,138,.12);color:#e6ddc9;font-size:13px;line-height:1.6}',
+        '.mvu-gold::after{content:"";position:absolute;inset:0;border-radius:13px;box-shadow:inset 0 0 0 1px rgba(232,207,138,.1);pointer-events:none}',
+        '.mvu-gold-head{display:flex;align-items:baseline;gap:10px;padding-bottom:9px;margin-bottom:10px;border-bottom:1px solid rgba(212,175,55,.18)}',
+        '.mvu-gold-name{font-size:15px;font-weight:700;letter-spacing:1px;color:#e8cf8a;text-shadow:0 0 14px rgba(212,175,55,.28)}',
+        '.mvu-gold-stage{font-size:11px;letter-spacing:.5px;color:#a8975f}',
+        '.mvu-gold-stage::before{content:"◆";margin-right:4px;color:#8d7a3f}',
+        '.mvu-gold-rows{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 14px}',
+        '.mvu-gold-row{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:5px 0;border-bottom:1px dashed rgba(212,175,55,.13)}',
+        '.mvu-gold-row:last-child{border-bottom:0}',
+        '.mvu-gold-row i{font-style:normal;font-size:11px;letter-spacing:.5px;color:#8b8578;flex:none}',
+        '.mvu-gold-row b{font-size:12.5px;font-weight:600;color:#efe6d2;text-align:right}',
+        '.mvu-gold-aff{margin-top:10px;display:flex;align-items:center;gap:10px}',
+        '.mvu-gold-aff i{font-style:normal;font-size:11px;letter-spacing:.5px;color:#8b8578}',
+        '.mvu-gold-bar{flex:1;height:6px;border-radius:3px;background:linear-gradient(90deg,rgba(212,175,55,.08),rgba(212,175,55,.2));overflow:hidden}',
+        '.mvu-gold-fill{height:100%;background:linear-gradient(90deg,#8d6f2a,#f0d488,#b4913c);box-shadow:0 0 12px rgba(240,212,136,.55)}',
+        '.mvu-gold-aff b{font-size:12px;color:#f0d488;min-width:36px;text-align:right}',
+        '@media (max-width:520px){.mvu-gold-rows{grid-template-columns:1fr}}',
+        '</style>',
+        '<div class="mvu-gold-head">',
+        `<div class="mvu-gold-name">${first}</div>`,
+        '<div class="mvu-gold-stage">',
+        txt(`${first}._关系阶段`, '泛泛之交'),
+        '</div>',
+        '</div>',
+        '<div class="mvu-gold-rows">',
+        `<div class="mvu-gold-row"><i>日期</i><b>${txt('世界.日期', '未知')} ${txt('世界.时间', '')}</b></div>`,
+        `<div class="mvu-gold-row"><i>天气</i><b>${txt('世界.天气', '晴')}</b></div>`,
+        `<div class="mvu-gold-row"><i>心情</i><b>${txt(`${first}.心情`, '平静')}</b></div>`,
+        `<div class="mvu-gold-row"><i>上衣</i><b>${txt(`${first}.衣着.上衣`, '未知')}</b></div>`,
+        '</div>',
+        '<div class="mvu-gold-aff">',
+        '<i>好感度</i>',
+        `<div class="mvu-gold-bar"><div class="mvu-gold-fill" style="width:${pct(`${first}.好感度`)}%"></div></div>`,
+        `<b><%- ${num(`${first}.好感度`, 0)} %></b>`,
+        '</div>',
         '</div>',
         '<StatusPlaceHolderImpl/>',
     ].join('\n');
@@ -169,6 +275,50 @@ function stripEjsEscape(s) {
         .replace(/^\s*```ejs\s*$/gim, '')
         .replace(/^\s*```\s*$/gim, '')
         .trim();
+}
+
+
+/** 极简 YAML 路径抽取：只认 `key:` 缩进层级，够用来核对 InitVar 与状态栏引用是否对得上 */
+function yamlPaths(text) {
+    const out = new Set();
+    const stack = [];
+    for (const raw of String(text || '').split(/\r?\n/)) {
+        const line = raw.replace(/\t/g, '  ');
+        const t = line.trim();
+        if (!t || t.startsWith('#') || t.startsWith('---') || t.startsWith('- ')) continue;
+        const m = line.match(/^(\s*)([^:#][^:]*):\s*(.*)$/);
+        if (!m) continue;
+        const indent = m[1].length;
+        const key = m[2].trim();
+        if (!key) continue;
+        while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
+        const path = stack.map(x => x.key).concat(key).join('.');
+        out.add(path);
+        stack.push({ indent, key });
+    }
+    return out;
+}
+
+/** 状态栏 HTML 里 getvar("stat_data.xxx") 引用到的变量路径集合（去掉 stat_data. 前缀） */
+function getvarPaths(html) {
+    const out = new Set();
+    const re = /getvar\(\s*["'`]([^"'`]+)["'`]/g;
+    let m;
+    while ((m = re.exec(String(html || '')))) {
+        out.add(m[1].replace(/^stat_data\./, '').trim());
+    }
+    return out;
+}
+
+/** 递归找酒馆助手脚本树里的所有脚本（含 folder 内的） */
+function flatScripts(list, out) {
+    const res = out || [];
+    for (const it of Array.isArray(list) ? list : []) {
+        if (!it) continue;
+        if (it.type === 'folder') { flatScripts(it.scripts, res); continue; }
+        res.push(it);
+    }
+    return res;
 }
 
 function jsLiteral(v) {
@@ -315,7 +465,10 @@ export const TOOLS = [
         name: 'mvu.templates',
         kind: 'read',
         desc: '取 MVU 变量系统的规范模板与 8 条条目配置（初始变量 YAML 骨架、更新规则、<UpdateVariable> 输出格式、变量列表、状态栏占位提醒、状态栏 HTML 骨架）。写卡前先调它，照着结构创作，不要自己发明字段名。',
-        params: { chars: 'array 角色名列表（可空，默认["角色"]）' },
+        params: {
+            chars: 'array 角色名列表（可空，默认["角色"]）',
+            style: 'string 可选，状态栏风格 golden(鎏金默认) / galgame(粉紫胶囊) / minimal(单行)',
+        },
         run: async a => {
             const chars = a.chars || [];
             return {
@@ -327,13 +480,15 @@ export const TOOLS = [
                 output_emphasis: OUTPUT_EMPHASIS,
                 var_list: VAR_LIST,
                 placeholder: PLACEHOLDER,
-                status_bar: statusBarHtml(chars),
+                status_bar: statusBarHtml(chars, a.style),
+                status_bar_styles: ['golden', 'galgame', 'minimal'].map(x => ({ style: x, html: statusBarHtml(chars, x) })),
                 rules: [
                     'InitVar 用 YAML，键名=中文变量名；数字写 0、布尔写 false、字符串写占位词、对象写 {}，不要编剧情数值。',
                     '`_` 开头=只读（AI 可见不可改）；`$` 开头=派生显示（AI 不可见，只给脚本/EJS 用）。',
                     '变量更新规则里禁止用 TS interface，一律 YAML 的 type / range / check。',
                     '不许在 InitVar 的 YAML 和变量名里写 {{...}} 酒馆宏——它在初始化时会被替换成乱码。',
-                    'MVU 需要用户先在扩展里装 MagVarUpdate（MagVariableUpdate）并注册 zod schema 脚本，否则这些条目只是静态文本。',
+                    'MVU 需要用户先在扩展里装 MagVarUpdate（MagVariableUpdate）并注册 zod schema 脚本，否则这些条目只是静态文本；不确定就调 mvu.doctor 逐环诊断。',
+                    '状态栏 HTML 里 getvar 引用的变量必须和 InitVar 里写的路径严格一致（含大小写与层级），否则那格永远显示 defaults。',
                 ],
             };
         },
@@ -560,14 +715,16 @@ export const TOOLS = [
         desc: '写 MVU 状态栏这一套：世界书「状态栏」条目（position=2、depth=2、order=35，内容为完整 HTML，读 stat_data 用 getvar）+ 两条正则——[美化]MVU状态栏（把 <StatusPlaceHolderImpl/> 换成这段 HTML，只影响显示）+ [不发送]隐藏状态栏标记（发给模型前把占位符清掉，免得它照着占位符编造）。两条正则写在角色卡的正则位（scoped），只对这张卡生效，并自动打开卡的正则开关；这张卡换到别的剧本也不会把状态栏糊到别人身上。',
         params: {
             book: 'string 世界书名',
-            html: 'string 状态栏 HTML（必须含 <StatusPlaceHolderImpl/> 占位符）',
+            html: 'string 可选，自定义状态栏 HTML（必须含 <StatusPlaceHolderImpl/>）；不传就用 style 模板',
+            style: 'string 可选，golden(鎏金默认) / galgame(粉紫胶囊) / minimal(单行)',
             enable_hide: 'boolean 可选，默认 true，创建「不发送」正则',
             card: 'string 可选，头像文件名（正则写到哪张卡，留空用当前角色）',
+            chars: 'array 可选，角色名列表（套模板时用，默认取当前角色名）',
         },
         run: async a => {
             if (!a.book) throw new Error('mvu.statusbar 需要 book');
-            const html = String(a.html || '').trim();
-            if (!html) throw new Error('mvu.statusbar 需要 html');
+            const chars = Array.isArray(a.chars) && a.chars.length ? a.chars : [String(charBy(a.card)?.name || '角色')];
+            const html = String(a.html || '').trim() || statusBarHtml(chars, a.style);
             if (!/StatusPlaceHolderImpl/.test(html)) throw new Error('状态栏 HTML 里必须保留 <StatusPlaceHolderImpl/> 占位符');
             const spec = { position: 2, depth: 2, order: 35, constant: false, enabled: true };
             const written = await writeEntry(a.book, '状态栏', html, spec);
@@ -608,6 +765,154 @@ export const TOOLS = [
                 regex_total_in_card: after.length,
                 problems,
                 bytes: html.length,
+            };
+        },
+    },
+    {
+        name: 'mvu.doctor',
+        kind: 'read',
+        desc: 'MVU 变量系统的逐环诊断，只读不写。查六件事：MagVarUpdate 扩展装没装、卡里有没有注册 zod 变量结构的脚本（registerMvuSchema）、7 条世界书条目齐不齐且 position/depth/order/constant 合不合规范、InitVar 里真有的变量与状态栏 HTML 里 getvar 引用的是否逐条对得上、两条状态栏正则是否落在卡上并开了闸、占位符是否只出现一次。返回 problems（坏在哪一环）+ fixes（按顺序照做）+ notes（不致命但对不上）。做卡做到「状态栏不显示」时先跑它，别自己猜。',
+        params: {
+            book: 'string 可选，世界书名；不给就用当前角色绑定的世界书',
+            card: 'string 可选，头像文件名；不给用当前角色',
+        },
+        run: async a => {
+            const problems = [];
+            const fixes = [];
+            const notes = [];
+            const ch = charBy(a.card);
+            const extOf = chx => (chx && chx.data && chx.data.extensions) || {};
+            const book = String(a.book || extOf(ch).world || '').trim();
+
+            // ① MagVarUpdate 扩展
+            let mvuDir = '';
+            for (const dir of ['MagVarUpdate', 'MagVariableUpdate', 'mvu']) {
+                try {
+                    const r = await fetch(`/scripts/extensions/third-party/${dir}/index.js`, { method: 'HEAD' });
+                    if (r && r.ok) { mvuDir = dir; break; }
+                } catch { /* 探测失败按没装处理 */ }
+            }
+            if (!mvuDir) {
+                problems.push('没探测到 MagVarUpdate（/scripts/extensions/third-party/MagVarUpdate/index.js 不是 200）');
+                fixes.push('先装 MagVarUpdate 扩展；装完刷新页面再跑一次 mvu.doctor');
+            }
+
+            // ② zod 变量结构脚本
+            const th = extOf(ch).tavern_helper || {};
+            const scripts = flatScripts(th.scripts);
+            const schemaHits = scripts.filter(x => /registerMvuSchema/.test(String(x.content || '')));
+            if (!ch) {
+                problems.push('当前没有角色卡（群聊或未开卡），MVU 状态栏与卡级正则都无处可挂');
+                fixes.push('先打开目标角色再跑');
+            } else if (!scripts.length) {
+                problems.push('这张卡没有酒馆助手脚本（data.extensions.tavern_helper.scripts 为空）');
+                fixes.push('装「酒馆助手（JS-Slash-Runner）」并把界面换成酒馆助手渲染；脚本/正则里的 EJS 要有它才执行');
+            } else if (!schemaHits.length) {
+                problems.push('卡里的脚本没有一个含 registerMvuSchema：变量没有类型约束，更新会飘');
+                fixes.push('用 mvu.schema 生成「变量结构」脚本（会自动剥 import、改成 export const Schema = z.object）');
+            }
+            const schemaEnabled = schemaHits.filter(x => x.enabled !== false);
+            if (schemaHits.length && !schemaEnabled.length) {
+                problems.push('变量结构脚本存在但被禁用了');
+                fixes.push('script.folder 或酒馆助手里把「变量结构」脚本 enabled 打开');
+            }
+
+            // ③ 世界书 7 条 + 配置
+            let entries = [];
+            if (!book) {
+                problems.push('这张卡没绑定世界书（data.extensions.world 为空），InitVar / 更新规则 / 状态栏都读不到');
+                fixes.push('先 lora/lore.bind 或角色卡设置里绑定世界书，或用 mvu.build 指定 book 建一套');
+            } else {
+                try {
+                    const got = await getEntries({ name: book, limit: 500 });
+                    entries = got.entries || [];
+                } catch (e) {
+                    problems.push(`世界书「${book}」读不出来：${e && e.message ? e.message : e}`);
+                    fixes.push('world.list 确认名字拼写，注意是全名不是简称');
+                }
+            }
+            const byComment = new Map(entries.map(e => [String(e.comment || ''), e]));
+            const missingSpec = [];
+            for (const spec of MVU_SPEC) {
+                const hit = byComment.get(spec.comment);
+                if (!hit) { missingSpec.push(spec.comment); continue; }
+                const diffs = [];
+                if (Number(hit.position) !== spec.position) diffs.push(`position ${hit.position}≠${spec.position}`);
+                if (Number(hit.depth) !== spec.depth) diffs.push(`depth ${hit.depth}≠${spec.depth}`);
+                if (Number(hit.order) !== spec.order) diffs.push(`order ${hit.order}≠${spec.order}`);
+                if (!!hit.constant !== !!spec.constant) diffs.push(`constant ${!!hit.constant}≠${spec.constant}`);
+                if (!!hit.enabled !== (spec.enabled !== false)) diffs.push(`enabled ${!!hit.enabled}≠${spec.enabled !== false}`);
+                if (diffs.length) {
+                    problems.push(`条目「${spec.comment}」配置不对：${diffs.join('，')}`);
+                    fixes.push(`world.upsertEntry 按规范重写「${spec.comment}」的位置/深度/顺序（用 mvu.build 最省事，它会按规范铺）`);
+                }
+            }
+            if (missingSpec.length) {
+                problems.push(`缺 ${missingSpec.length} 条 MVU 条目：${missingSpec.join('、')}`);
+                fixes.push('mvu.build 一次性补齐这 7 条（同名会更新不会重复新建）');
+            }
+
+            // ④ 变量名对齐
+            const initEntry = byComment.get('[InitVar]初始变量');
+            const barEntry = byComment.get('状态栏');
+            if (initEntry && barEntry) {
+                const vars = yamlPaths(String(initEntry.content || '').replace(/<#escape-ejs>[\s\S]*?<\/#escape-ejs>/g, ''));
+                const refs = getvarPaths(barEntry.content);
+                const missing = [...refs].filter(p => !vars.has(p));
+                if (missing.length) {
+                    problems.push(`状态栏引用了 InitVar 里不存在的变量（那几格永远显示 defaults）：${missing.slice(0, 12).join('、')}${missing.length > 12 ? ` 等 ${missing.length} 个` : ''}`);
+                    fixes.push('二选一：在 InitVar 里补上这些路径（注意层级与大小写完全一致），或把状态栏里对应 getvar 换成真实存在的变量名');
+                }
+                const unused = [...vars].filter(p => !refs.has(p) && !p.includes('.') && p !== '世界' && p !== '主角');
+                if (unused.length) notes.push(`InitVar 里有 ${unused.length} 个顶层变量状态栏没用到（正常，剧情变量不必都上栏）：${unused.slice(0, 8).join('、')}`);
+                if (!/<StatusPlaceHolderImpl\/>/.test(String(barEntry.content || ''))) {
+                    problems.push('「状态栏」条目里没有 <StatusPlaceHolderImpl/> 占位符，脚本找不到替换位置');
+                    fixes.push('mvu.statusbar 重写这一条（它会带占位符），自定义 HTML 时别把占位符删了');
+                }
+            } else if (initEntry || barEntry) {
+                notes.push('InitVar 或 状态栏 只有一条，无法做变量名对齐检查');
+            }
+
+            // ⑤ 两条状态栏正则
+            const rs = scopedScripts(ch);
+            const ids = ['mvu-status-bar', 'mvu-status-hide'];
+            const hitIds = ids.filter(id => rs.some(r => r && r.id === id));
+            if (ids.length !== hitIds.length) {
+                const lost = ids.filter(id => !hitIds.includes(id));
+                problems.push(`卡里缺状态栏正则：${lost.join('、')}（写在全局正则里不会跟卡走，换张卡就串）`);
+                fixes.push('mvu.statusbar 重跑一遍，它默认 scope=card 并自动开闸');
+            }
+            for (const r of rs.filter(x => x && ids.includes(x.id))) {
+                const raw = String(r.findRegex || '');
+                const mm = raw.match(/^\/([\s\S]+)\/([a-z]*)$/);
+                if (!mm) { problems.push(`正则「${r.scriptName || r.id}」的 findRegex 不是 /.../flags 形式，引擎不会认`); continue; }
+                try {
+                    const re = new RegExp(mm[1], mm[2]);
+                    if (!re.test('<StatusPlaceHolderImpl/>')) {
+                        problems.push(`正则「${r.scriptName || r.id}」匹配不到 <StatusPlaceHolderImpl/>，等于没写`);
+                        fixes.push('把 findRegex 改成 /<StatusPlaceHolderImpl\\/>/g');
+                    }
+                } catch (e) {
+                    problems.push(`正则「${r.scriptName || r.id}」编译失败：${e && e.message ? e.message : e}`);
+                }
+                if (r.disabled) { problems.push(`正则「${r.scriptName || r.id}」是禁用状态`); fixes.push('把它 disabled 关掉（或 mvu.statusbar 重跑）'); }
+            }
+            if (ch && !scopedAllowed(ch)) {
+                problems.push('这张卡的正则开关没开（character_allowed_regex 不含它的 avatar），卡级正则一条都不会跑');
+                fixes.push('mvu.statusbar 或 regex.upsert 会自动开闸；手动开就在「正则 → Scoped」里勾上这张卡');
+            }
+
+            return {
+                ok: problems.length === 0,
+                card: ch ? ch.avatar : '',
+                book,
+                mvu_dir: mvuDir || '',
+                scripts: scripts.length,
+                schema_scripts: schemaHits.length,
+                entries_found: entries.length,
+                problems,
+                fixes,
+                notes,
             };
         },
     },

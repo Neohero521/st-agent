@@ -20,10 +20,16 @@ import { getContext } from '../../../extensions.js';
 
 export function charBy(avatar) {
     const ctx = getContext();
-    const av = avatar === undefined || avatar === null || avatar === '' ? ctx.characterId : avatar;
-    if (av === undefined || av === null || av === '') return null;
     const list = Array.isArray(ctx.characters) ? ctx.characters : [];
-    return list.find(x => x && x.avatar === av) || null;
+    const av = String(avatar === undefined || avatar === null ? '' : avatar).trim();
+    if (av) return list.find(x => x && x.avatar === av) || null;
+    // ctx.characterId 是 this_chid（**索引**，不是头像名）：拿它去比 avatar 会永远 null，
+    // 那会让"默认写当前角色卡"静默退化成写全局（正则跑到别的卡上）。这里按索引取，再按对象兜底。
+    const idx = ctx.characterId;
+    if (idx !== undefined && idx !== null && idx !== '' && list[Number(idx)]) return list[Number(idx)] || null;
+    const ava = (ctx.character && ctx.character.avatar) || '';
+    if (ava) return list.find(x => x && x.avatar === ava) || null;
+    return null;
 }
 
 export function scopedScripts(ch) {
