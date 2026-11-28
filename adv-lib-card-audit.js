@@ -44,9 +44,9 @@ const PLACEHOLDER_TEXT = [
 export function initVarTopKeys(text) {
     const out = [];
     for (const line of String(text || '').split(/\r?\n/)) {
-        if (!line || /^\s/.test(line)) continue;
-        const m = line.match(/^([^#\-][^:]*):\s*$/);
-        if (m) out.push(m[1].trim());
+        if (!line || /^\s/.test(line) || /\s#/.test(line)) continue;
+        const m = line.match(/^([^#\-][^:]*):\s*(?:\s*#.*)?$/);
+        if (m) out.push(m[1].trim().replace(/\.\s*$/, '').replace(/^['"]|['"]$/g, ''));
     }
     return out;
 }
@@ -60,8 +60,8 @@ export function schemaTopKeys(text) {
     const out = [];
     for (const line of rest.split(/\r?\n/)) {
         if (/^\}\s*[),]/.test(line)) break;
-        const m = line.match(/^ {2}([^:\s]+)\s*:/);
-        if (m) out.push(m[1]);
+        const m = line.match(/^ {2}((?:['"][^'"]*['"]|[^:\s]+))\s*:/);
+        if (m) out.push(m[1].replace(/^['"]|['"]$/g, ''));
     }
     return out;
 }
@@ -108,8 +108,8 @@ export function auditSchema(text, initKeys = []) {
         fixes.push('改成 z.coerce.number().transform(v => _.clamp(v, 0, 100)).prefault(0)');
     }
     if (!/\.prefault\s*\(/.test(s)) {
-        problems.push('没有 .prefault()：InitVar 缺字段时整个对象会校验失败，变量直接不动');
-        fixes.push('每个叶子补 .prefault(null) / .prefault(0)，每个子对象补 .prefault({})');
+        notes.push('schema 里没有 .prefault()：InitVar 少字段时整个对象会校验失败（写卡器从 InitVar 反推时，null 字段会自动写成 .nullable().prefault(null)，铁定有 prefault）');
+        fixes.push('用 mvu.schema.gen 从 [InitVar] 反推一遍，prefault/nullable 会按字段类型自动补齐');
     }
     const keys = schemaTopKeys(s);
     if (initKeys.length && keys.length) {
@@ -169,12 +169,13 @@ export function auditEntries(entries, opts = {}) {
         // 变量更新规则：必须真的教模型怎么输出更新块（而不是罗列字段结构）
         if (/变量更新规则/.test(c)) {
             const hasCmd = body.indexOf('<UpdateVariable') >= 0 || body.indexOf('JSONPatch') >= 0;
+            const hasPath = /绝对路径|以\s*\//.test(body) || /\/\S+\/\S+/.test(body);
             const looksSchema = /type\s*:\s*(number|string|boolean|array|object)/.test(body) || /range\s*:\s*\d/.test(body);
             if (!hasCmd && looksSchema) {
                 problems.push(`「${c}」写成了变量结构定义（type/range/check）：这是 zod schema 的活，模型读完仍不知道要输出 <UpdateVariable> 块，变量永远不动`);
                 fixes.push('拆开：字段类型/范围写进 zod schema；这条只写「每轮末尾必须输出 <UpdateVariable> + 绝对路径 / 增减幅度 / 何时才变」');
-            } else if (!hasCmd) {
-                problems.push(`「${c}」没有提到 <UpdateVariable> 或 JSONPatch：模型不会真的输出变量块`);
+            } else if (!hasCmd && !hasPath) {
+                problems.push(`「${c}」既没提 <UpdateVariable>/JSONPatch，也没有绝对路径要求：模型不会真的输出变量块，或写出无根的 /好感度 路径`);
                 fixes.push('补一段「每次回复末尾必须输出 <UpdateVariable></UpdateVariable>」并给出绝对路径示例');
             }
         }
@@ -282,6 +283,14 @@ export function auditStatusBar(repl, initText) {
     if (/StatusPlaceHolderImpl/.test(s)) {
         problems.push('状态栏 replaceString 里又出现 <StatusPlaceHolderImpl/>：这是被替换的那个占位符本身，替换结果里再留一个会二次触发/露出文字');
         fixes.push('删掉 replaceString 内部的占位符，只留渲染后的 HTML');
+    }
+    // 回调参数用错：VARIABLE_UPDATE_ENDED 的第一个参数就是 MvuData，写 data?.new_variables 永远 undefined
+    if (/[\w$]\s*\??\.\s*new_variables\s*\)/.test(s)) {
+        problems.push('状态栏把事件回调参数写成 data?.new_variables：VARIABLE_UPDATE_ENDED 的第一个参数已经是变量对象，取 .new_variables 恒为 undefined → 状态栏永远读不到变量');
+        fixes.push('改成 populateCharacterData(v) / render(v)（直接用回调第一个参数），或用 mvu.statusbar 默认 shim 自动修正');
+    }
+    if (/waitUntil\s*\(/.test(s) && s.indexOf('window.waitUntil') < 0) {
+        notes.push('状态栏用了 waitUntil 但没注入兜底：srcdoc iframe 里没有这个全局，会 ReferenceError 崩 init（写卡器会自动注入 _shimStatusBarHtml）');
     }
     if (!/\$\s*\(/.test(s) && !/<script/i.test(s)) {
         notes.push('状态栏没有 $( / <script>：不是可执行的渲染页，只会是一段静态 DOM');

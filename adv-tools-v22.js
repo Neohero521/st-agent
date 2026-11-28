@@ -15,8 +15,9 @@ import { toPlacement } from './tools-set-c.js';
 import { charBy, scopedScripts, upsertScoped, allRegexes, scopedAllowed } from './adv-lib-regex.js';
 import { writeCardExtensions } from './adv-lib-card.js';
 import { fixedMvuRegexes, wrapHtml, unwrapHtml, buildSchemaScript, MVU_RUNTIME_ID, MVU_SCHEMA_ID, FIXED_MVU_REGEX_IDS } from './adv-lib-mvu-assets.js';
-import { normalizeEntryComment, entryTemplate, normalizeEntryContent, wcInitVarYaml, wcVarUpdateRule, wcVarOutputFormat, wcVarOutputEmphasis, wcStatusPlaceholder, wcVarListContent } from './adv-lib-wc-entries.js';
-import { WC_STATUS_TEMPLATE, mockScript, ensureHtmlDoc, injectMock, parseInitVarYaml } from './adv-lib-mvu-preview.js';
+import { normalizeEntryComment, entryTemplate, normalizeEntryContent, wcInitVarYaml, wcVarUpdateRule, wcVarUpdateRuleContract, wcVarOutputFormat, wcVarOutputEmphasis, wcStatusPlaceholder, wcVarListContent } from './adv-lib-wc-entries.js';
+import { WC_STATUS_TEMPLATE, mockScript, ensureHtmlDoc, injectMock, parseInitVarYaml, shimStatusBarHtml } from './adv-lib-mvu-preview.js';
+import { schemaFromInitVar } from './adv-lib-schema-gen.js';
 import { FE_CHAT_BASE_HTML, feChatHtml } from './adv-lib-fe-template.js';
 import { editText, editPreview } from './adv-lib-str-edit.js';
 import { FE_SPEC, STATUSBAR_SPEC, SCRIPT_SPEC, ENTRY_SPEC, auditFrontend, auditStatusbar, auditScript, auditEntryList } from './adv-lib-spec-audit.js';
@@ -571,6 +572,7 @@ export const TOOLS = [
             chars: 'array 角色名列表',
             initvar: 'string 可选，AI 创作后的 [InitVar] YAML 正文（含或不含 stat_data 根都行）',
             update_rule: 'string 可选，AI 创作的变量更新规则 YAML',
+            raw_rule: 'boolean 可选，true 用写卡器逐字模板（只有 type/range/check）；默认 false = 模板 + 输出契约段（<UpdateVariable> / 绝对路径 / _ 与 $ 禁改 / delta 语义）。沈曼卿那种「只列字段结构」就是契约段缺失，模型不输出更新块',
             status_bar: 'string 可选，状态栏 HTML（读 stat_data 用 getvar）',
         },
         run: async a => {
@@ -585,7 +587,7 @@ export const TOOLS = [
                 const lines = initvar.split('\n');
                 initvar = lines.slice(1).map(l => l.replace(/^ {2}/, '')).join('\n').trim();
             }
-            const rule = String(a.update_rule || '').trim() || wcVarUpdateRule(chars);
+            const rule = String(a.update_rule || '').trim() || (a.raw_rule === true ? wcVarUpdateRule(chars) : wcVarUpdateRuleContract(chars));
             const bar = String(a.status_bar || '').trim() || statusBarHtml(chars);
             const rawContents = {
                 '[InitVar]初始变量': initvar,
@@ -763,6 +765,44 @@ export const TOOLS = [
         },
     },
     {
+        name: 'mvu.schema.gen',
+        kind: 'write',
+        desc: '从 [InitVar]初始变量 自动反推 zod schema 并写进「变量结构」脚本位（照抄写卡器 generateMvuSchemaScript）。这是消灭「schema 顶层键和 InitVar 对不上」的唯一根治办法：键名/层级直接照 InitVar 生成，不可能错位。口径：null→z.string().nullable().prefault(null)（数值类字段按名字猜成 z.coerce.number().nullable().prefault(0)）、number→z.coerce.number()、空对象→z.record(...).prefault({})、非空对象→z.object 不加值、数组→z.array。头尾自动补 import registerMvuSchema 与 $(() => registerMvuSchema(Schema))。不写业务约束（clamp 之类按卡需求另加）。',
+        params: {
+            book: 'string 世界书名（读 [InitVar] 条目）',
+            card: 'string 可选，头像文件名，默认当前角色',
+            initvar: 'string 可选，直接给 InitVar YAML 正文（给了就不读 book）',
+        },
+        run: async a => {
+            const ctx = c();
+            const av = a.card || ctx.characterId;
+            const local = (ctx.characters || []).find(x => x.avatar === av);
+            if (!local) throw new Error(`找不到角色卡「${av}」`);
+            let init = String(a.initvar || '').trim();
+            if (!init) {
+                if (!a.book) throw new Error('mvu.schema.gen 需要 book（或直接传 initvar）');
+                const got = await getEntries({ name: a.book, limit: 500 });
+                const hit = ((got && got.entries) || []).find(e => /initvar/i.test(String(e.comment || '')));
+                if (!hit) throw new Error(`世界书「${a.book}」里没有 [InitVar] 条目：先写 InitVar（mvu.build）或直接传 initvar`);
+                init = hit.content;
+            }
+            const r = schemaFromInitVar(init);
+            const item = { type: 'script', enabled: true, name: '变量结构', id: 'mvu-schema', content: r.code, info: '由 [InitVar] 反推生成的 MVU 变量结构脚本。', button: { enabled: true, buttons: [] }, data: {}, export_with: { data: true, button: true } };
+            const out = await putScript(ctx, local, av, item);
+            return {
+                ok: true,
+                avatar: av,
+                id: 'mvu-schema',
+                top_keys: r.topKeys,
+                fields: r.fields,
+                bytes: r.code.length,
+                created: out.created,
+                scripts: out.scripts,
+                note: 'schema 的顶层键已与 InitVar 强制对齐；若卡里需要 0~100 这类业务约束，再在 z.coerce.number() 后补 .transform(v => _.clamp(v, 0, 100))',
+            };
+        },
+    },
+    {
         name: 'mvu.runtime',
         kind: 'write',
         desc: '写 MVU 本体脚本（酒馆助手脚本位里的第二份，id=961f366d-e403-45c2-8155-3d14ec86de53、name=MVU）。内容只有一行 import 指向 MagVarUpdate 的 bundle.js，并带上 5 个隐藏按钮（重新处理变量 / 重新读取初始变量 / 快照楼层 / 重演楼层 / 重试额外模型解析 / 清除旧楼层变量）。很多卡「schema 写了但变量不动」就是因为卡里只有变量结构、没有这份本体：MagVarUpdate 的运行时根本没挂上。',
@@ -802,6 +842,7 @@ export const TOOLS = [
             html: 'string 可选，自定义状态栏 HTML（必须含 <StatusPlaceHolderImpl/>）；不传就用 style 模板',
             style: 'string 可选，golden(鎏金默认) / galgame(粉紫胶囊) / minimal(单行)',
             enable_hide: 'boolean 可选，默认 true，创建「不发送」正则',
+            shim: 'boolean 可选，默认 true：自动修 data?.new_variables 回调参数 + 给 waitUntil 注入 srcdoc 兜底（写卡器 _shimStatusBarHtml 同款）',
             card: 'string 可选，头像文件名（正则写到哪张卡，留空用当前角色）',
             chars: 'array 可选，角色名列表（套模板时用，默认取当前角色名）',
         },
@@ -815,6 +856,8 @@ export const TOOLS = [
             }
             if (!/StatusPlaceHolderImpl/.test(html)) throw new Error('状态栏 HTML 里必须保留 <StatusPlaceHolderImpl/> 占位符');
             if (!/<\/html>/i.test(html)) html = ensureHtmlDoc(html);
+            // 照抄写卡器 _shimStatusBarHtml：修 data?.new_variables 回调参数 + 注入 waitUntil 兜底
+            if (a.shim !== false) html = shimStatusBarHtml(html);
             const spec = { position: 2, depth: 2, order: 35, constant: false, enabled: true };
             // 教科书卡（陈天爱）里没有「状态栏」HTML 条目：条目只放「<状态栏>占位符提醒」，
             // HTML 只在正则 replaceString。这里按规范写提醒条目 + 清掉历史误写的 HTML 条目。

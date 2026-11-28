@@ -602,6 +602,26 @@ export function normalizeEntryContent(comment, content) {
     return content;
 }
 
+/**
+ * 变量更新规则的「输出契约」版：写卡器默认模板只给字段 type/range/check，
+ * 模型读完仍可能不知道要输出 <UpdateVariable>、路径要写 /根/。
+ * 教科书卡（陈天爱，写卡器产出）在这里专门写了「绝对路径原则」。
+ * 本函数 = 写卡器原文 + 通用契约段（插在「变量更新规则:」之下），其余逐字不动。
+ */
+export function wcVarUpdateRuleContract(chars) {
+    const base = generateVarUpdateRule(chars);
+    const first = (Array.isArray(chars) && chars[0]) || '角色';
+    const block = [
+        '  通用:',
+        '    - 每次回复正文末尾必须输出 <UpdateVariable>…</UpdateVariable> 块（内含 <Analysis> 分析与 <JSONPatch>），不可省略',
+        '    - 路径必须是绝对路径：以 /' + first + '/ 或 /世界/ 开头；严禁无根路径（如 /好感度），也严禁扁平化（如把 /' + first + '/衣着/上装 写成 /' + first + '/上装）',
+        '    - 数值增减用 delta（value 写增量），绝对赋值用 replace，新增键/元素用 insert，删除用 remove，移动用 move',
+        '    - 不要更新 _ 开头的只读字段（如 _关系阶段）；不要更新 $ 开头的派生字段（如 $成就）',
+        '    - 更新前先扫历史去重：同一事件（交易、得失物品、金钱收支）不要重复更新',
+    ].join('\n') + '\n';
+    return base.replace('变量更新规则:\n', '变量更新规则:\n' + block);
+}
+
 export const wcInitVarYaml = generateInitVarYaml;
 export const wcVarUpdateRule = generateVarUpdateRule;
 export const wcVarOutputFormat = generateVarOutputFormat;

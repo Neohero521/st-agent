@@ -266,3 +266,43 @@ function scalar(v) {
     }
     return s;
 }
+
+/**
+ * 状态栏 HTML 兜底注入（照抄 我的写卡器-v329.59.js 的 _shimStatusBarHtml）
+ *
+ * 两个真实坑：
+ *  1) VARIABLE_UPDATE_ENDED 回调签名是 (new_variables, old_variables)，AI 常写成
+ *     populateCharacterData(data?.new_variables) → 恒为 undefined → 「状态栏永远读不到变量」。
+ *  2) srcdoc iframe 里没有 waitUntil 全局，写了 waitUntil(...) 的旧卡/新卡会 ReferenceError 崩 init。
+ * 这里做幂等修正：能修的直接修，修不了的注入 waitUntil 兜底实现。
+ */
+export function shimStatusBarHtml(html) {
+    try {
+        let h = String(html || '');
+        if (!h) return h;
+        // 1) 回调参数修正
+        h = h.replace(/populateCharacterData\(\s*([\w$]+)\s*\??\.\s*new_variables\s*\)/g, 'populateCharacterData($1)');
+        // 2) waitUntil 兜底（只在真的用到、且没注入过、且有 <script> 时）
+        if (/waitUntil\s*\(/.test(h) && /getVariables\s*\(\s*\{\s*type\s*:\s*['"]message['"]\s*\}/.test(h) &&
+            h.indexOf('window.waitUntil') < 0 && h.indexOf('<script') >= 0) {
+            const shim = '\n<script>\n' +
+                '(function(){\n' +
+                '  if (typeof window.waitUntil === "function") return;\n' +
+                '  window.waitUntil = function(fn, timeout) {\n' +
+                '    var _t = timeout || 5000, _st = Date.now();\n' +
+                '    return new Promise(function(_res) {\n' +
+                '      (function _poll() {\n' +
+                '        try { if (fn && fn()) return _res(true); } catch(e) { return _res(false); }\n' +
+                '        if (Date.now() - _st > _t) return _res(false);\n' +
+                '        setTimeout(_poll, 50);\n' +
+                '      })();\n' +
+                '    });\n' +
+                '  };\n' +
+                '})();\n' +
+                '</script>\n';
+            const idx = h.indexOf('<script');
+            return h.slice(0, idx) + shim + h.slice(idx);
+        }
+        return h;
+    } catch (e) { return String(html || ''); }
+}
