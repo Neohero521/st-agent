@@ -14,15 +14,15 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message || '', '[sync]')
     steps:
       - uses: actions/checkout@v4
-      - name: Apply v1.29.2 package to extension root
+      - name: Apply v1.30.0 package to extension root
         run: |
           set -e
-          curl -fL --retry 3 --retry-delay 2 -o /tmp/pkg.zip "https://aka.doubaocdn.com/s/2wQH3QELzD"
+          curl -fL --retry 3 --retry-delay 2 -o /tmp/pkg.zip "https://aka.doubaocdn.com/s/56RJhcMkST"
           ls -l /tmp/pkg.zip
           rm -rf /tmp/pkg && mkdir -p /tmp/pkg && unzip -o -q /tmp/pkg.zip -d /tmp/pkg
           cp -fR /tmp/pkg/st-agent/. .
           git config user.name 'st-agent-bot'
           git config user.email 'bot@users.noreply.github.com'
           git add -A
-          git commit -m 'fix: [hidden] 被 display:flex 覆盖导致计划卡永不消失，统一 !important 兜底 + 空正文兜底, sync root to v1.29.2 [sync]' || echo 'nothing to commit'
+          git commit -m 'feat: 照抄写卡器写入酒馆链路（edit-attribute → merge → TavernHelper），修脚本/正则 403 与假成功, sync root to v1.30.0 [sync]' || echo 'nothing to commit'
           git push origin HEAD:main
