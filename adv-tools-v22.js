@@ -377,6 +377,23 @@ function matchEntry(e, comment) {
     return false;
 }
 
+/**
+ * 写卡器三类前端的自动分型：只看名字和内容特征，不猜用户意图。
+ * 名字优先（[界面]正文美化 / [界面]XX面板 / [界面]聊天界面），其次看模板指纹。
+ */
+function inferFrontendKind(name = '', html = '') {
+    const n = String(name);
+    const h = String(html);
+    // 名字优先级最高：写卡器的正则名就是分类标记
+    if (/正文美化|美化正文|信纸|日记/.test(n)) return 'beautify';
+    if (/聊天|对话|chat/i.test(n)) return 'chat';
+    if (/面板|数据|论坛|任务|背包/.test(n)) return 'structured';
+    if (/callParentApi|state\.messages|TavernHelper\.generate/.test(h)) return 'chat';
+    if (/parseData/.test(h)) return 'structured';
+    if (/extractContent/.test(h)) return 'beautify';
+    return 'structured';
+}
+
 /** 找一个对应条目：同名就更新，避免同款条目重复堆积 */
 function findEntry(list, comment) {
     return list.find(e => matchEntry(e, comment)) || null;
@@ -1156,7 +1173,7 @@ export const TOOLS = [
             regex_name: 'string 可选，按正则名包含匹配',
         },
         run: async a => {
-            const kind = String(a.kind || 'chat').toLowerCase();
+            let kind = String(a.kind || '').toLowerCase();
             let html = String(a.html || '');
             let source = 'html 参数';
             if (!html) {
@@ -1167,8 +1184,10 @@ export const TOOLS = [
                 if (!hit) hit = rs.find(r => r && r.markdownOnly && !r.promptOnly && String(r.findRegex || '').indexOf('StatusPlaceHolder') < 0);
                 if (hit) { html = String(hit.replaceString || ''); source = `卡内正则「${hit.scriptName || hit.id}」`; }
             }
+            // 没显式指定 kind 时按正则名 + 内容特征推断，否则会把 structured 面板按 0 层卡的口径误报
+            if (!kind) kind = inferFrontendKind(a.regex_name || (a.html ? '' : ''), String(html || ''));
             const r = auditFrontend(html, kind);
-            return Object.assign({ source }, r);
+            return Object.assign({ source, inferred: a.kind ? false : true }, r);
         },
     },
     {
