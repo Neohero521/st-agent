@@ -1,5 +1,7 @@
 name: Sync extension root from release package
 
+# retrigger v1.39.2
+
 on:
   workflow_dispatch:
   push:
