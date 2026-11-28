@@ -132,7 +132,23 @@ export function mockScript(statData) {
       '    };\n' +
       '  }\n' +
       '  window.$ = window.jQuery = _miniJQ;\n' +
+      '  function ownContent() {\n' +
+      '    var kids = document.body ? Array.prototype.slice.call(document.body.children) : [];\n' +
+      '    for (var i = 0; i < kids.length; i++) {\n' +
+      '      var el = kids[i];\n' +
+      '      if (el.id === "__mvu_fallback_root") continue;\n' +
+      '      var tag = String(el.tagName || "").toLowerCase();\n' +
+      '      if (tag === "script" || tag === "style" || tag === "link" || tag === "meta") continue;\n' +
+      '      if ((el.textContent || "").replace(/\\s/g, "").length) return true;\n' +
+      '    }\n' +
+      '    return false;\n' +
+      '  }\n' +
       '  function fallbackRender() {\n' +
+      '    if (ownContent()) {\n' +
+      '      var fb = document.getElementById("__mvu_fallback_root");\n' +
+      '      if (fb && fb.parentNode) fb.parentNode.removeChild(fb);\n' +
+      '      return;\n' +
+      '    }\n' +
       '    var root = document.getElementById("render-root") || document.querySelector(".card-body") || document.body;\n' +
       '    if (!root) return;\n' +
       '    var stillLoading = root.querySelector(".loading-state");\n' +
@@ -191,10 +207,15 @@ export function ensureHtmlDoc(html) {
     } else if (hasHtmlTag && !hasHeadTag) {
         s = s.replace(/<html([^>]*)>/i, '<html$1>\n<head></head>');
     }
+    // 兜底壳只补「body 里一个可见元素都没有」的裸片段；
+    // 已经有自己 DOM 的状态栏绝不能再塞一层 mvu-status-card（否则成品面板上会叠一坨默认变量表）
     if (s.indexOf('id="render-root"') < 0 && s.indexOf("id='render-root'") < 0) {
-        if (/<body([^>]*)>/i.test(s)) {
+        const bodyM = s.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+        const inner = bodyM ? bodyM[1] : '';
+        const hasVisibleEl = /<(div|section|main|article|table|ul|ol|p|span|canvas|svg|figure|header|footer|aside|h[1-6])\b/i.test(inner.replace(/<script[\s\S]*?<\/script>/gi, ''));
+        if (!hasVisibleEl && /<body([^>]*)>/i.test(s)) {
             s = s.replace(/(<body[^>]*>)/i,
-                '$1\n<div class="mvu-status-card"><div class="card-body" id="render-root"><div class="loading-state">正在加载状态数据...</div></div></div>');
+                '$1\n<div class="mvu-status-card" id="__mvu_fallback_root"><div class="card-body" id="render-root"><div class="loading-state">正在加载状态数据...</div></div></div>');
         }
     }
     return s;

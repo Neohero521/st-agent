@@ -47,8 +47,9 @@ export function initVarTopKeys(text) {
     const out = [];
     for (const line of String(text || '').split(/\r?\n/)) {
         if (!line || /^\s/.test(line) || /\s#/.test(line)) continue;
-        const m = line.match(/^([^#\-][^:]*):\s*(?:\s*#.*)?$/);
-        if (m) out.push(m[1].trim().replace(/\.\s*$/, '').replace(/^['"]|['"]$/g, ''));
+        // 顶层既可能是「名字:」（根对象），也可能是「名字: 0」（标量根，MVU 同样支持）
+        const m = line.match(/^([^#\-\s][^:]*)\s*:\s*(.*)$/);
+        if (m && !/^\s*#/.test(m[2])) out.push(m[1].trim().replace(/\.\s*$/, '').replace(/^['"]|['"]$/g, ''));
     }
     return out;
 }
