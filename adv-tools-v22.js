@@ -25,6 +25,7 @@ import { FE_BEAUTIFY_BASE_HTML, FE_STRUCTURED_BASE_HTML } from './adv-lib-fe-tem
 import { planEntry, entryBody, deriveEntryKeys, inferEntryConfig, NONMVU_ENTRY_KINDS } from './adv-lib-entry-auto.js';
 import { SCRIPT_RUNTIME_SPEC, scriptTemplate, SCRIPT_TEMPLATE_KINDS } from './adv-lib-script-spec.js';
 import { auditCardPack, auditInitVar, auditSchema } from './adv-lib-card-audit.js';
+import { auditPlayState, fixPlayState } from './adv-lib-play-doctor.js';
 import { listSpill, readSpill, setTodos, listSessionsBrief, snapshotSession, usageOf } from './index-sessions.js';
 import { getGoal, changeGoal } from './index-goal.js';
 
@@ -1008,6 +1009,10 @@ export const TOOLS = [
                     }
                 } else {
                     if (!a.book) throw new Error('mode=entry 需要 book');
+                    // v1.42：整份 HTML 写常驻条目 = 每轮 prompt 白背几万字符，小上下文直接「AI 不回复」
+                    if (html.length > 8000) {
+                        throw new Error(`这份前端 HTML 有 ${html.length} 字符，写进常驻世界书条目会让每轮提示词多背几万字符（手机端小上下文会直接 400 / 不回复）。改用默认 mode=regex（HTML 挂卡内正则 replaceString），条目只留一行输出标记`);
+                    }
                     const out = await writeEntry(a.book, comment, html, { position: 0, depth: 0, order: 240, constant: true, enabled: true });
                     written = { scope: 'entry', book: a.book, comment, uid: out.uid, warn: 'HTML 写在条目正文会每轮占几万 token，写卡器的做法是 fe.regex' };
                 }
@@ -1535,6 +1540,33 @@ export const TOOLS = [
                 problems,
                 items,
             };
+        },
+    },
+    {
+        name: 'chat.doctor',
+        kind: 'read',
+        desc: '游玩污染体检——回答「为什么装了插件之后所有卡的回复都不对」「为什么 Agent 写的卡不回复」。逐项查四类「从卡逃逸到全局」的污染：① 全局正则（所有角色共享：单卡美化/状态栏/MVU 专用却被写全局、promptOnly 整段删正文、replaceString 几 KB 整段替换）；② 全局注入 extensionPrompts（每轮进每一张卡）；③ 全局启用世界书，以及书里常驻的超长条目（把 47KB 前端 HTML 写进 constant 条目是「AI 不回复」的头号原因）；④ 当前聊天绑的书与当前卡的字段（system_prompt 过肥会顶掉 ST 的 system 指令、卡里正则总闸没开、开场白缺占位）。最后给一个「每轮固定进提示词多少字符」的估算。只读，不改任何东西。',
+        params: {
+            card: 'string 可选，头像文件名（默认当前角色）',
+            book: 'string 可选，额外体检一本世界书',
+        },
+        run: async a => auditPlayState(charBy(a.card || c().characterId), { book: a.book }),
+    },
+    {
+        name: 'chat.fix',
+        kind: 'write',
+        desc: '按 chat.doctor 的结论定点清理，不碰聊天内容、不改 ST 对话流程。action：global-regex-to-card（把会连累所有卡的全局正则迁到当前卡并开闸）/ disable-global-regex（先停用，最保险）/ clear-inject（清本插件写的常驻注入）/ unselect-book（把书从全局书单移出）/ disable-big-entry（禁用书里 >8000 字符的常驻条目——这是「AI 不回复」最直接的修法，内容不删、随时能开回来）。默认 dry_run=true 只报「会改什么」，确认后传 dry_run:false 才落盘。names 为空时只处理 chat.doctor 判定危险的那些。',
+        params: {
+            action: 'string 必填：global-regex-to-card / disable-global-regex / clear-inject / unselect-book / disable-big-entry',
+            names: 'array 可选，按名字指定要处理的全局正则或注入 key',
+            book: 'string 可选，unselect-book 用；也可用 names[0]',
+            card: 'string 可选，迁到卡里时指定卡（默认当前角色）',
+            dry_run: 'boolean 可选，默认 true 只预演',
+        },
+        run: async a => {
+            const action = String(a.action || '').trim();
+            if (!action) throw new Error('需要 action：global-regex-to-card / disable-global-regex / clear-inject / unselect-book');
+            return fixPlayState(action, { names: a.names, book: a.book, card: a.card, dryRun: a.dry_run !== false });
         },
     },
     {

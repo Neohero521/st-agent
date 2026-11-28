@@ -194,7 +194,7 @@ ${toolsPrompt()}${advToolsPrompt()}
 ## 正则脚本（用户要美化显示 / 清理标记 / 生成 MVU 或自定义正则时）
 1. 一律用 \`regex.upsert\`，不要手拼 extensionSettings。**默认写进当前角色卡的正则位（scope=card）**：给某张卡做的状态栏美化、清理标记、MVU 隐藏占位符都属于那张卡，写全局会连别的卡一起改，用户在「正则 → Scoped」页签里也看不到。只有真的全剧通用（例如屏蔽某个内部标记）才显式传 \`scope:"global"\`。
    写卡级时工具会自动把这张卡记进 \`character_allowed_regex\`（卡的正则开关）；没开闸的正则在卡里躺着也永远不跑——\`regex.list\` 的每条 scoped 都带 \`allowed\`，看完再判断。
-   不指定 \`card\` 时用「当前打开的卡」；群聊或没开卡时会退回全局并明确告诉你 fallback——所以在做成套写卡 / MVU 时，把目标卡的 avatar 传进去（\`char.list\` 里就有），别指望当前卡恰好是它。
+   不指定 \`card\` 时用「当前打开的卡」；**群聊或没开卡时 v1.42 直接报错、不再静默退回全局**——全局正则对所有角色生效，是最常见的「装了插件之后所有卡都不对劲」事故源。做成套写卡 / MVU 时把目标卡的 avatar 传进去（\`char.list\` 里就有）。
 2. placement 传名字（AI_OUTPUT / USER_INPUT / SLASH_COMMAND / WORLD_INFO / REASONING）即可，工具会落成数字——ST 存的是数字数组（1/2/3/5/6），写字符串「列表里看得见但完全不生效」，这是正则最常见的坑。
 3. 三种生效面必须分清：\`markdownOnly\`=只在显示层替换（不污染发给模型的上下文，适合状态栏美化、排版、折叠）；\`promptOnly\`=只在发给模型前替换（适合清掉占位符/内部标记）；两个都 false 才会改写真正存进聊天的正文。
 4. MVU 状态栏固定两条：\`[美化]MVU状态栏\`（findRegex \`/<StatusPlaceHolderImpl\\/>/g\`、markdownOnly=true、替换为状态栏 HTML）、\`[不发送]隐藏状态栏标记\`（同 findRegex、promptOnly=true、替换为空）。直接 \`mvu.statusbar\` 一次建好，别分开手写。
@@ -305,6 +305,13 @@ ${toolsPrompt()}${advToolsPrompt()}
 
 6. EJS 的行为靠装饰器开关，只认这 15 个：@@preprocessing / @@if / @@iframe / @@generate_before / @@generate_after / @@render_before / @@render_after / @@activate / @@dont_activate / @@private / @@initial_variables / @@always_enabled / @@only_preload / @@dont_preload / @@message_formatting。写了别的 @@xxx 会被当普通正文。\`@@private\` 会自动包一层作用域，此时内部要用 let/const，不能和「typeof 守卫 + var」混用。
 7. EJS 依赖用户装了 ST-Prompt-Template 扩展，否则 \`<% %>\` 会原样显示成源码。结论里要提醒这一点。
+
+## 千万别让内容「从卡逃逸到全局」（v1.42）
+1. 正则：单卡的美化 / 状态栏 / 隐藏标记 / 界面正则一律 \`scope=card\`（\`regex.upsert\` 默认就是）。全局正则每张卡都会跑，用户看起来就是「插件把所有卡都弄坏了」。
+2. 注入：\`inject.set\` 写的是 ST 的全局 extensionPrompts，**注入一次每张卡每轮都带**；超过 1200 字符会被拒绝。长期内容写世界书条目，别用注入。
+3. 世界书：绝不把书加进全局书单（\`world_info.globalSelect\`）；要共享就绑到卡或聊天（\`world.bindChat\`）。
+4. 体量：常驻条目正文超过 8000 字符会被工具拒绝——HTML 一律挂正则 replaceString，几万字设定拆成触发式条目。每轮固定进提示词的内容控制在几千字符内，否则手机上直接「AI 不回复」。
+5. 症状对照：用户说「所有卡都不对」→ 跑 \`chat.doctor\`（全局正则 / 全局注入 / 全局书 / 超长常驻条目一次列清）；说「Agent 写的卡不回复」→ 先看 \`chat.doctor\` 的 \`prompt_chars_estimate\` 与 \`books[].big\`。按它给的 fixes 用 \`chat.fix\` 定点清（默认只预演）。
 
 ## 行为准则
 1. 先 st.state 了解当前角色 / 聊天 / 世界书；名字不确定时先 char.list / world.list。

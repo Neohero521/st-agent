@@ -176,28 +176,8 @@ export const ST_TOOLS_C = [
             if (!wantGlobal) {
                 const ch = charBy(a.card);
                 if (!ch) {
-                    // 群聊 / 欢迎页没有当前卡：这时写卡级无处可挂，退回全局并明确告知，不静默改作用域
-                    const x = c();
-                    x.extensionSettings = x.extensionSettings || {};
-                    const list = x.extensionSettings.regex || (x.extensionSettings.regex = []);
-                    let item = list.find(r => r.scriptName === a.scriptName);
-                    const created = !item;
-                    if (!item) {
-                        item = { id: `st-agent-${Date.now()}`, scriptName: a.scriptName };
-                        list.push(item);
-                    }
-                    Object.assign(item, {
-                        findRegex: a.findRegex,
-                        replaceString: a.replaceString ?? '',
-                        placement: toPlacement(a.placement),
-                        disabled: false,
-                        markdownOnly: false,
-                        promptOnly: false,
-                        runOnEdit: false,
-                        substituteRegex: 0,
-                    }, flags);
-                    x.saveSettingsDebounced?.();
-                    return { ok: true, scope: 'global', fallback: '没有当前角色卡（群聊/未开卡），已写全局', created, scriptName: a.scriptName, placement: item.placement, flags: { markdownOnly: !!item.markdownOnly, promptOnly: !!item.promptOnly, runOnEdit: !!item.runOnEdit } };
+                    // v1.42：不再静默退回全局 —— 全局正则对所有卡生效，是「所有卡被插件影响」的头号通道
+                    throw new Error('没有目标角色卡（群聊/欢迎页/未开卡）：卡级正则无处可挂。请显式传 card（char.list 取 avatar）；确实要给所有卡用才写 scope:"global"，并清楚它会连别的卡一起改');
                 }
                 const got = await upsertScoped(ch, {
                     scriptName: a.scriptName,

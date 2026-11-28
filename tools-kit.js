@@ -256,6 +256,12 @@ export const TOOLS = [
             commit: 'boolean 默认 false（只预演）；true 才真正写盘',
         },
         run: async a => {
+            // v1.42：常驻条目塞整份 HTML/几万字设定 = 每轮 prompt 白背，小上下文直接「AI 不回复」
+            const ents = Array.isArray(a.book && a.book.entries) ? a.book.entries : [];
+            const tooBig = ents.filter(e => String((e && e.content) || '').length > 8000 && e.constant !== false);
+            if (tooBig.length) {
+                throw new Error(`${tooBig.length} 条条目正文超过 8000 字符且默认常驻（${tooBig.map(e => `「${e.comment || '(未命名)'}」${String(e.content).length} 字符`).join('、')}）：这些内容每轮都会进提示词。HTML 一律挂正则 replaceString（fe.regex），长设定拆成多条触发式条目并给 keys`);
+            }
             const { ops, notes } = await buildOps(a);
             if (!ops.length) throw new Error('没有任何可写入的内容：检查 fields / book.entries / scripts / regexes');
             const plan = await planOps(ops);

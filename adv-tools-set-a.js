@@ -78,9 +78,15 @@ export const ADV_TOOLS_A = [
     },
     {
         name: 'inject.set', kind: 'write',
-        desc: '往提示词里注入一段常驻文本（扩展注入位）。position=in_chat 时按 depth 插进对话。',
-        params: { key: '注入槽位名，默认 st-agent', text: '文本', position: 'in_prompt|in_chat|before_prompt', depth: 'in_chat 时的深度', role: 'system|user|assistant', scan: '是否允许世界书扫描' },
-        run: a => setInject(a),
+        desc: '往提示词里注入一段常驻文本（ST 的 extensionPrompts）。**这是全局槽位：注入后每一张卡的每一轮都会带上它**，不属于某一本世界书或某一张卡——临时调试可以，长期内容一律写世界书条目。v1.42 起超过 1200 字符必须显式 confirm:true，否则直接拒绝（一条注入就毁掉所有卡的游玩是最常见的事故）。position=in_chat 时按 depth 插进对话。',
+        params: { key: '注入槽位名，默认 st-agent', text: '文本', position: 'in_prompt|in_chat|before_prompt', depth: 'in_chat 时的深度', role: 'system|user|assistant', scan: '是否允许世界书扫描', confirm: 'boolean 长文本（>1200 字符）必填 true' },
+        run: a => {
+            const text = String(a.text || '');
+            if (text.length > 1200 && a.confirm !== true) {
+                throw new Error(`这段注入有 ${text.length} 字符，会进每一张卡每一轮的提示词。确实要常驻就传 confirm:true；只是这张卡的设定请写世界书条目（world.upsertEntry）`);
+            }
+            return setInject(a);
+        },
     },
     {
         name: 'inject.clear', kind: 'write',
