@@ -15,7 +15,7 @@ import { toPlacement } from './tools-set-c.js';
 import { charBy, scopedScripts, upsertScoped, allRegexes, scopedAllowed } from './adv-lib-regex.js';
 import { writeCardExtensions } from './adv-lib-card.js';
 import { fixedMvuRegexes, wrapHtml, unwrapHtml, buildSchemaScript, MVU_RUNTIME_ID, MVU_SCHEMA_ID, FIXED_MVU_REGEX_IDS } from './adv-lib-mvu-assets.js';
-import { normalizeEntryComment, entryTemplate, normalizeEntryContent, wcInitVarYaml, wcVarUpdateRule, wcVarUpdateRuleContract, wcVarOutputFormat, wcVarOutputEmphasis, wcStatusPlaceholder, wcVarListContent } from './adv-lib-wc-entries.js';
+import { normalizeEntryComment, entryTemplate, normalizeEntryContent, wcInitVarYaml, wcVarUpdateRule, wcVarUpdateRuleContract, wcVarUpdateRuleFromInitVar, wcVarOutputFormat, wcVarOutputEmphasis, wcStatusPlaceholder, wcVarListContent } from './adv-lib-wc-entries.js';
 import { WC_STATUS_TEMPLATE, mockScript, ensureHtmlDoc, injectMock, parseInitVarYaml, shimStatusBarHtml } from './adv-lib-mvu-preview.js';
 import { schemaFromInitVar } from './adv-lib-schema-gen.js';
 import { FE_CHAT_BASE_HTML, feChatHtml } from './adv-lib-fe-template.js';
@@ -588,7 +588,10 @@ export const TOOLS = [
                 const lines = initvar.split('\n');
                 initvar = lines.slice(1).map(l => l.replace(/^ {2}/, '')).join('\n').trim();
             }
-            const rule = String(a.update_rule || '').trim() || (a.raw_rule === true ? wcVarUpdateRule(chars) : wcVarUpdateRuleContract(chars));
+            // v1.44：规则默认从真实 InitVar 树派生。写死模板只认好感度/心情/衣着 + 世界时间地点天气 + 主角物品栏，
+            // 套到世界卡/系统卡上就是每条 patch 打在不存在的路径、被 MVU 静默丢弃，变量永远不动。
+            const rule = String(a.update_rule || '').trim()
+                || (a.raw_rule === true ? wcVarUpdateRule(chars) : (wcVarUpdateRuleFromInitVar(initvar) || wcVarUpdateRuleContract(chars)));
             const bar = String(a.status_bar || '').trim() || statusBarHtml(chars);
             const rawContents = {
                 '[InitVar]初始变量': initvar,

@@ -92,7 +92,7 @@ export function auditInitVar(text) {
 }
 
 /** schema 体检（并对 InitVar 的顶层键） */
-export function auditSchema(text, initKeys = []) {
+export function auditSchema(text, initKeys = [], opts = {}) {
     const s = String(text || '');
     const problems = [];
     const fixes = [];
@@ -110,9 +110,39 @@ export function auditSchema(text, initKeys = []) {
         problems.push('用了 z.number()：模型常把数值写成字符串（"85"），会校验失败；教科书卡一律 z.coerce.number()');
         fixes.push('改成 z.coerce.number().transform(v => _.clamp(v, 0, 100)).prefault(0)');
     }
-    if (!/\.prefault\s*\(/.test(s)) {
-        notes.push('schema 里没有 .prefault()：InitVar 少字段时整个对象会校验失败（写卡器从 InitVar 反推时，null 字段会自动写成 .nullable().prefault(null)，铁定有 prefault）');
-        fixes.push('用 mvu.schema.gen 从 [InitVar] 反推一遍，prefault/nullable 会按字段类型自动补齐');
+    // 写卡器口径（v1.44 起从 InitVar 反推）：null → z.string().nullable().prefault(null)
+    // number → z.coerce.number()（必要时 .prefault(0)）；对象闭合 → .prefault({})
+    const bareStr = (s.match(/z\.string\(\)(?!\s*\.nullable)/g) || []).length;
+    const bareNum = (s.match(/z\.coerce\.number\(\)(?!\s*\.(transform|prefault|nullable|min|max|int|optional|describe))/g) || []).length;
+    const bareObj = (s.split('\n').filter(l => /^\s*\}\)\s*,?\s*$/.test(l))).length;
+    // 写卡器口径：只有 [InitVar] 里写了 null 的字段才必须 .nullable().prefault(...)；
+    // InitVar 给了具体初值时字段本来就在，缺 prefault 不算错（写卡器的 schema 反推也是这么做的）。
+    const nullCount = Number(opts.nullCount || 0);
+    const needPrefault = nullCount > 0;
+    if (bareStr) {
+        const msg = `schema 有 ${bareStr} 处裸 z.string()（没跟 .nullable()）`;
+        if (needPrefault) {
+            problems.push(msg + `：InitVar 里有 ${nullCount} 个字段初始值是 null，开局就报「期望 string 实际 null」，整轮变量更新被丢弃`);
+            fixes.push('写成 z.string().nullable().prefault(null)');
+        } else notes.push(msg + '：InitVar 没给 null 初值，暂时不炸；但只要哪天用 remove 清空该字段就会校验失败，建议补上');
+    }
+    if (bareNum) {
+        const msg = `schema 有 ${bareNum} 处 z.coerce.number() 后面没有 .prefault()`;
+        if (needPrefault) {
+            problems.push(msg + '：字段缺失时该对象校验失败，整个 stat_data 不更新');
+            fixes.push('数值字段补 .prefault(0)；带业务范围就 .transform(v => _.clamp(v, 0, 100)).prefault(0)');
+        } else notes.push(msg + '：建议补 .prefault(0)（配合 remove 重建时不会炸）');
+    }
+    if (bareObj) {
+        const msg = `schema 有 ${bareObj} 处 z.object 闭合后没有 .prefault({})`;
+        if (needPrefault) {
+            problems.push(msg + '：JSON Patch remove 掉子键后重建会失败');
+            fixes.push('嵌套对象一律写成 }).prefault({})');
+        } else notes.push(msg + '：建议补 .prefault({})（remove 掉整棵子对象后能重建）');
+    }
+    if (!/\.prefault\s*\(/.test(s) && !bareStr && !bareNum && !bareObj) {
+        notes.push('schema 里没有 .prefault()：字段被 remove 后重建会失败，可用 mvu.schema.gen 从 [InitVar] 反推补齐');
+        fixes.push('用 mvu.schema.gen 从 [InitVar] 反推一遍');
     }
     const keys = schemaTopKeys(s);
     if (initKeys.length && keys.length) {
@@ -341,6 +371,45 @@ export function auditStatusBar(repl, initText) {
 }
 
 /** 整卡体检：条目 + 正则 + 脚本 + InitVar/schema 联动 */
+/**
+ * 规则正文里的 /根键/ 必须真的存在于变量树。
+ * 写卡器的 generateVarUpdateRule 把「好感度/心情/衣着/物品 + 世界时间地点天气 + 主角物品栏」写死在模板里，
+ * Agent 套到世界卡/系统卡上，规则指向的键 schema 里没有，模型每轮 patch 全打在无效路径、被 MVU 静默丢弃。
+ */
+export function auditRuleRoots(ruleText, initKeys = []) {
+    const text = String(ruleText || '');
+    const problems = [];
+    const fixes = [];
+    const notes = [];
+    if (!text.trim()) return { ok: false, problems: ['变量更新规则条目是空的'], fixes: ['用 mvu.build 生成（默认按 [InitVar] 变量树派生）'], notes };
+    if (!initKeys.length) {
+        notes.push('没有 InitVar 顶层键可比对，跳过「规则根节点」校验');
+        return { ok: true, problems, fixes, notes };
+    }
+    // ① 覆盖度：每个真实变量根都必须在规则里出现（根名 + ":" 或 /根/），否则模型根本不知道该更新什么
+    const uncovered = initKeys.filter(k => {
+        const esc = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return !(new RegExp('/' + esc + '/').test(text) || new RegExp('(^|\\s)' + esc + '\\s*:').test(text));
+    });
+    if (uncovered.length) {
+        problems.push(`变量根 [${uncovered.join('、')}] 在规则里完全没有更新指引：模型只会在它们之外乱编路径`);
+        fixes.push('用 mvu.build 重生成规则（v1.44 起默认从 [InitVar] 变量树逐字段派生 check，不再套写死的角色卡字段）');
+    }
+
+    // ② 多段路径 /A/B：A 必须是真实根。只认「/A/B」这种两段以上写法，避免把“上装/下装/贴身内衣”这类并列列表误当路径
+    const segPath = Array.from(text.matchAll(/(?:^|[\s（(「『"“”、，。；:：])\/([\u4e00-\u9fa5A-Za-z_$][\u4e00-\u9fa5A-Za-z0-9_$]{0,23})\/([\u4e00-\u9fa5A-Za-z0-9_$.*]+)/g)).map(m => m[1]);
+    const badRoots = Array.from(new Set(segPath)).filter(r => r !== 'stat_data' && initKeys.indexOf(r) < 0);
+    if (badRoots.length) {
+        problems.push(`规则里的路径 /${badRoots.join('/、/')}/… 指向不存在的根（真实根：${initKeys.join('、')}）：这些 patch 每轮都会打在无效路径上、被 MVU 静默丢弃，变量永远不动`);
+        fixes.push('把规则改成本卡的变量树：根名只能是 ' + initKeys.join('/') + '；用 mvu.build 重生成最稳');
+    }
+
+    if (badRoots.indexOf('主角') >= 0 || (initKeys.indexOf('好感度') < 0 && /\/好感度\//.test(text))) {
+        notes.push('规则里出现了角色卡模板字段（好感度/心情/衣着 或 主角/物品栏）：这是 generateVarUpdateRule 的写死模板，说明规则不是按本卡变量树生成的');
+    }
+    return { ok: problems.length === 0, problems, fixes, notes, roots: Array.from(new Set(segPath)) };
+}
+
 export function auditCardPack(pack, opts = {}) {
     const data = (pack && pack.data) || pack || {};
     const ext = data.extensions || {};
@@ -355,14 +424,17 @@ export function auditCardPack(pack, opts = {}) {
     const runtimeScript = scripts.find(s => String(s.id || '') === '961f366d-e403-45c2-8155-3d14ec86de53' || String(s.name || '') === 'MVU');
 
     const init = auditInitVar(initEntry ? initEntry.content : '');
-    const schema = auditSchema(schemaScript ? schemaScript.content : '', init.keys);
+    const initNullCount = (String(initEntry ? initEntry.content : '').match(/[:：]\s*null\b/g) || []).length;
+    const schema = auditSchema(schemaScript ? schemaScript.content : '', init.keys, { nullCount: initNullCount });
     const hasStatusBarRegex = regexes.some(r => String(r.id || '') === 'mvu-status-bar');
     const ents = auditEntries(entries, { hasStatusBarRegex });
+    const ruleEntry = entries.find(e => /变量更新规则/.test(String(e.comment || '')));
+    const rule = auditRuleRoots(ruleEntry ? ruleEntry.content : '', init.keys);
     const regs = auditRegexes(regexes, { scopedAllowed: opts.scopedAllowed });
     const sbRegex = regexes.find(r => String(r.id || '') === 'mvu-status-bar');
     const sb = sbRegex ? auditStatusBar(sbRegex.replaceString, initEntry ? initEntry.content : '') : { ok: true, problems: [], fixes: [], notes: [], hits: 0, total: 0 };
 
-    const levels = { init, schema, statusbar: sb, entries: ents, regexes: regs };
+    const levels = { init, schema, rule, statusbar: sb, entries: ents, regexes: regs };
     const problems = [];
     const fixes = [];
     const notes = [];

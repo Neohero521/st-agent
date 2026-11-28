@@ -1,3 +1,5 @@
+import { parseInitVarYaml } from './adv-lib-mvu-preview.js';
+
 /**
  * 写卡器条目体系（照抄 我的写卡器-v329.59.js，原文搬运，不做改写）
  *
@@ -620,6 +622,117 @@ export function wcVarUpdateRuleContract(chars) {
         '    - 更新前先扫历史去重：同一事件（交易、得失物品、金钱收支）不要重复更新',
     ].join('\n') + '\n';
     return base.replace('变量更新规则:\n', '变量更新规则:\n' + block);
+}
+
+
+/** 键名 → 大致类型语义（只用来写 check 文案，不改变 schema 类型） */
+const NUM_HINT = /(好感|信任|疑心|心动|防备|亲密|感情|依赖|恐惧|愤怒|理智|体力|精神|血量|生命|灵力|法力|伤势|心魔|声望|气运|因果|贡献|金钱|金币|灵石|银两|威望|魅力|进度|等级|层数|数量|分数|积分|怒气|饥饿|饱食|疲劳|污染|san)/i;
+const PERCENT_HINT = /(好感|信任|心动|防备|亲密|依赖|恐惧|愤怒|理智|体力|精神|血量|生命|灵力|法力|伤势|心魔|怒气|饥饿|饱食|疲劳|污染|san)/i;
+const TIME_HINT = /(时间|日期|时刻|年月日|纪元|历)/;
+const PLACE_HINT = /(地点|位置|场景|所在|坐标)/;
+const WEATHER_HINT = /(天气|气候)/;
+const TODO_HINT = /(事务|任务|待办|约定|委托|日程)/;
+
+function inferNullNumeric(key) {
+    const k = String(key || '');
+    if (NUM_HINT.test(k)) return true;
+    return /(度|值)$/.test(k) && !/^(态度|温度|清晰度|透明度|尺度)$/.test(k);
+}
+
+function checkLinesFor(key, val) {
+    const k = String(key);
+    const isNum = typeof val === 'number' || ((val === null || val === undefined) && inferNullNumeric(k));
+    if (TIME_HINT.test(k)) return ['剧情时间推进、跨日、跨场景时更新'];
+    if (PLACE_HINT.test(k)) return ['角色移动 / 场景切换时更新'];
+    if (WEATHER_HINT.test(k)) return ['剧情明确表现天气变化时更新'];
+    if (TODO_HINT.test(k) && val !== null && typeof val === 'object') return ['记录需要完成的任务、约定与重要事件', '完成即移除，新增及时添加，最多保持 5~8 项'];
+    if (/(伤势|伤情|受损)/.test(k)) return ['受伤、疗伤、休整时更新，数值越高越接近失能'];
+    if (/(心魔|执念|污染|侵蚀)/.test(k)) return ['心境波动、走火入魔、压制或放任时更新'];
+    if (/(境界|品阶|阶位|层级|等级)/.test(k)) return ['突破、晋阶、跌落时更新，未发生境界变化不要改'];
+    if (/(身份|名号|称号)/.test(k)) return ['身份、职位、称号发生变化时替换'];
+    if (isNum) {
+        if (PERCENT_HINT.test(k)) return ['按剧情实际变化增减（±1~6），未发生明确变化不要改'];
+        return ['按剧情实际变化增减，未发生明确变化不要改'];
+    }
+    if (Array.isArray(val)) return ['获得、消耗、遗失或转移时增删元素，不要整段重写'];
+    if (typeof val === 'boolean') return ['条件满足时置 true，不满足置 false'];
+    if (val !== null && typeof val === 'object') return ['其下字段按各自规则更新'];
+    return ['发生明确改变时替换为新值'];
+}
+
+function leafTypeLine(val, key) {
+    if (typeof val === 'number') return 'type: number';
+    if (val === null || val === undefined) return inferNullNumeric(key) ? 'type: number' : 'type: string';
+    if (typeof val === 'boolean') return 'type: boolean';
+    if (Array.isArray(val)) {
+        const item = (val.length && typeof val[0] === 'number') ? 'number' : 'string';
+        return 'type: |-\n        ' + item + '[]';
+    }
+    return 'type: string';
+}
+
+/**
+ * 从 [InitVar] 的变量树直接生成「变量更新规则」正文（写卡器口径的契约段 + 按真实键逐条给 check）。
+ *
+ * 为什么必须有这个：writeVarUpdateRule(charNames) 把「好感度/心情/衣着/物品 + 世界时间地点天气 + 主角物品栏」
+ * 写死在模板里，只适配恋爱/日常角色卡。世界卡、系统卡、群像卡套上去，规则指向的键在 schema 里根本不存在，
+ * 模型每轮输出的 JSON Patch 全部落在无效路径、被 MVU 静默丢弃 —— 变量永远不动，看起来就像「卡写了但玩不起来」。
+ *
+ * @param {string} initvarText [InitVar] 条目正文
+ * @param {object} opts { headline }
+ * @returns {string|null} 解析不出树时返回 null（调用方回退旧模板）
+ */
+export function wcVarUpdateRuleFromInitVar(initvarText, opts = {}) {
+    let tree = null;
+    try { tree = parseInitVarYaml(String(initvarText || '')); } catch (e) { tree = null; }
+    if (tree && typeof tree === 'object' && tree.stat_data && typeof tree.stat_data === 'object' && Object.keys(tree).length === 1) tree = tree.stat_data;
+    if (!tree || typeof tree !== 'object' || Array.isArray(tree) || !Object.keys(tree).length) return null;
+
+    const roots = Object.keys(tree).filter(k => !/^[$_]/.test(k));
+    if (!roots.length) return null;
+    const rootPath = roots.map(r => '/' + r + '/').join(' ');
+
+    const out = ['---', '变量更新规则:', '  通用:'];
+    out.push('    - ' + (opts.headline || '每次回复正文末尾必须输出 <UpdateVariable>…</UpdateVariable> 块（内含 <Analysis> 分析与 <JSONPatch>），不可省略'));
+    out.push('    - 路径必须是绝对路径，以已有根键开头：' + rootPath + '；严禁无根路径（如 /好感度），也严禁扁平化（如把 /' + roots[0] + '/衣着/上装 写成 /' + roots[0] + '/上装）');
+    out.push('    - 数值增减用 delta（value 写增量），绝对赋值用 replace，新增键/元素用 insert，删除用 remove，移动用 move');
+    out.push('    - 不要更新以 _ 开头的只读字段；不要更新以 $ 开头的派生字段');
+    out.push('    - 更新前先扫历史去重：同一事件（交易、得失、受伤、移动）不要重复更新');
+    out.push('    - 只允许更新下列结构里出现的路径，未列出的键一律不要凭空新增');
+
+    let leaves = 0;
+    const MAX_LEAVES = 160;
+    function walk(obj, indent, depth) {
+        const pad = ' '.repeat(indent);
+        const keys = Object.keys(obj).filter(k => !/^[$_]/.test(k));
+        for (const key of keys) {
+            if (leaves >= MAX_LEAVES) {
+                out.push(pad + '# ……字段过多，剩余部分按同名字段自行套用同类规则');
+                return;
+            }
+            const val = obj[key];
+            const isObj = val !== null && typeof val === 'object' && !Array.isArray(val);
+            out.push(pad + key + ':');
+            if (isObj && depth < 3) {
+                walk(val, indent + 2, depth + 1);
+                continue;
+            }
+            if (isObj) {
+                out.push(pad + '  type: |-');
+                out.push(pad + '    { ' + Object.keys(val).join('; ') + ' }');
+            } else {
+                leafTypeLine(val, key).split('\n').forEach(l => out.push(pad + '  ' + l));
+                const isNum = typeof val === 'number' || ((val === null || val === undefined) && inferNullNumeric(key));
+                if (isNum && PERCENT_HINT.test(key)) out.push(pad + '  range: 0~100');
+            }
+            out.push(pad + '  check:');
+            checkLinesFor(key, val).forEach(c => out.push(pad + '    - ' + c));
+            leaves++;
+        }
+    }
+    walk(tree, 2, 0);
+
+    return out.join('\n');
 }
 
 export const wcInitVarYaml = generateInitVarYaml;

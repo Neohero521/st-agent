@@ -629,8 +629,15 @@ export function auditRegexScript(r) {
         fixes.push('改成 [] 或字符串数组');
     }
     const sub = s.substituteRegex;
-    if (sub !== undefined && sub !== null && [0, 1, 2].indexOf(Number(sub)) < 0) {
+    if (sub === undefined || sub === null) {
+        notes.push(`${name} 没写 substituteRegex 字段：ST 会取默认 2（每次替换前跑一遍 {{宏}} 替换），写卡器 _convertRegexScript 统一写 0`);
+        fixes.push('补 substituteRegex: 0（findRegex 里没有酒馆宏时不需要替换）');
+    } else if ([0, 1, 2].indexOf(Number(sub)) < 0) {
         notes.push(`${name} substituteRegex=${sub} 不是 0/1/2：引擎会按「未知值用原始正则」处理`);
+    }
+    if (s.trimStrings === undefined || s.trimStrings === null) {
+        notes.push(`${name} 没有 trimStrings 字段：引擎按数组遍历，缺字段读成 null 时 $1 捕获组不会裁首尾空白`);
+        fixes.push('补 trimStrings: []');
     }
     if (s.disabled === true) notes.push(`${name} 是 disabled 状态：这条现在完全不跑（UI 里能看到，引擎会跳过）`);
     return { ok: problems.length === 0, name: s.scriptName || s.name || s.id || '', problems, fixes, notes };

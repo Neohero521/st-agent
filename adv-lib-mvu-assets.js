@@ -48,6 +48,9 @@ export function unwrapHtml(html) {
 
 /** 6 条固定正则（ST 正则字段名；statusBarHtml 传纯 HTML，内部自动 ```html 包裹） */
 export function fixedMvuRegexes(statusBarHtml) {
+    // 写卡器 _convertRegexScript 每条都会写全这两个字段：substituteRegex=0（findRegex 里没有宏，
+    // 写成 2 只会在每次替换前白跑一遍宏替换）；trimStrings=[]（缺字段时 ST 读成 null，$n 捕获组不裁空白）。
+    const base = { substituteRegex: 0, trimStrings: [], disabled: false };
     return [
         {
             id: FIXED_MVU_REGEX_IDS[0],
@@ -122,7 +125,7 @@ export function fixedMvuRegexes(statusBarHtml) {
             minDepth: null,
             maxDepth: null,
         },
-    ];
+    ].map(r => Object.assign({}, base, r));
 }
 
 /** 变量结构脚本：只给 z.object 正文，自动补 import 头与 registerMvuSchema 注册尾（写卡器同款） */
