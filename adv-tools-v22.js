@@ -23,6 +23,7 @@ import { FE_SPEC, STATUSBAR_SPEC, SCRIPT_SPEC, ENTRY_SPEC, auditFrontend, auditS
 import { FE_BEAUTIFY_BASE_HTML, FE_STRUCTURED_BASE_HTML } from './adv-lib-fe-template.js';
 import { planEntry, entryBody, deriveEntryKeys, inferEntryConfig, NONMVU_ENTRY_KINDS } from './adv-lib-entry-auto.js';
 import { SCRIPT_RUNTIME_SPEC, scriptTemplate, SCRIPT_TEMPLATE_KINDS } from './adv-lib-script-spec.js';
+import { auditCardPack, auditInitVar, auditSchema } from './adv-lib-card-audit.js';
 import { listSpill, readSpill, setTodos, listSessionsBrief, snapshotSession, usageOf } from './index-sessions.js';
 import { getGoal, changeGoal } from './index-goal.js';
 
@@ -1624,6 +1625,7 @@ export const TOOLS = [
                 }
                 if (spec.comment === '[InitVar]初始变量') {
                     if (/\{\{/.test(body)) issues.push('「[InitVar]初始变量」含 {{...}} 酒馆宏：初始化时会被替换成乱码，必须删掉');
+                    if (/^\s*stat_data\s*:/.test(body)) issues.push('「[InitVar]初始变量」多套了一层 stat_data 根：变量会变成 stat_data.stat_data.X，schema 与状态栏都读不到。删掉这一行，下面的键整体左移两格');
                     const nums = [...body.matchAll(/:\s*(-?\d+(?:\.\d+)?)\s*$/gm)].map(m => Number(m[1]).valueOf());
                     const nonZero = nums.filter(n => n !== 0);
                     if (nonZero.length) warnings.push(`「[InitVar]初始变量」有 ${nonZero.length} 个非 0 数值（${nonZero.slice(0, 5).join('、')}）：初始值应为中性 0，编造剧情数值会让开局状态失真`);
@@ -1836,6 +1838,31 @@ export const TOOLS = [
             const r = readSpill(null, String(a.id), a.offset, a.limit);
             if (!r) throw new Error(`没有 spill #${a.id}（可能已被更新的 spill 淘汰，或不属于当前会话）`);
             return r;
+        },
+    },
+    {
+        name: 'card.audit',
+        kind: 'read',
+        desc: '整卡体检（对照写卡器教科书卡）：一次查完 InitVar 多套 stat_data 根、schema 与 InitVar 顶层键不一致、z.number 未 coerce、状态栏 HTML 塞进世界书条目、触发式没 keys 白写、模板占位没按题材改写、6 条固定正则缺失或 placement/markdownOnly 配错、缺 MVU 本体或变量结构脚本。拿到别人的卡、自己写完卡、用户报「变量不动 / 状态栏不出来」时先跑这个，比逐项抽查快。只读，不改卡。',
+        params: {
+            card: 'string 可选，头像文件名（默认当前角色）',
+            book: 'string 可选，指定世界书名（默认用卡绑定的那本）',
+        },
+        run: async a => {
+            const ch = charBy(a.card);
+            if (!ch) throw new Error('找不到角色卡' + (a.card ? `：${a.card}` : ''));
+            // 卡里没内嵌世界书时，回落到这张卡绑定的书（写卡器产品形态：条目在外部 TestBook 里）
+            const pack = JSON.parse(JSON.stringify(ch));
+            const bookName = String(a.book || '') || (((ch.data && ch.data.extensions || {}).world) || '');
+            if (!(pack.data && pack.data.character_book && (pack.data.character_book.entries || []).length) && bookName) {
+                try {
+                    const got = await getEntries({ name: bookName, limit: 500 });
+                    pack.data = pack.data || {};
+                    pack.data.character_book = { name: bookName, entries: got.entries || [] };
+                } catch (e) { /* 书不存在就按空处理 */ }
+            }
+            const r = auditCardPack(pack);
+            return Object.assign({ card: ch.avatar || '', name: ch.name || '', book: bookName || '' }, r);
         },
     },
 ];
