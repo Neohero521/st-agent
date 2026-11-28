@@ -936,3 +936,17 @@ body.sta-lock { overflow: hidden; }
 @media (max-width: 480px) {
     .sta-approval.sta-approval-plan { left: 8px; right: 8px; max-height: 74vh; }
 }
+
+/* ═══════════ v1.29.2 修复：点了「允许」卡片也不消失 ═══════════
+   成因：v1.29.1 给 .sta-approval 加了 display:flex。作者样式（0,1,0）优先于浏览器自带的
+   [hidden]{display:none}（UA 样式），于是 box.hidden = true 完全失效 —— 卡片永远挂在面板底部，
+   用户点了批/否也没反应，看起来就是「一直在这里」。
+   兜底：凡靠 hidden 收起的元素统一 !important 隐藏。 */
+.sta-approval[hidden],
+.sta-drawer[hidden],
+.sta-sessions[hidden],
+.sta-plan-chip[hidden],
+.sta-sub-chip[hidden],
+.sta-stop[hidden] {
+    display: none !important;
+}

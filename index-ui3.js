@@ -212,7 +212,11 @@ export function askPlanReview(plan, signal) {
         // v1.30：长计划默认折叠。正文太长时先给前 900 字 + 「展开全文」，
         // 让用户一眼看到计划开头就能判断，也不用滚十几屏才找到按钮。
         const FOLD = 900;
-        if (full.length > FOLD) {
+        if (!full.trim()) {
+            // 兜底：模型不写正文就 plan.submit（或计划被清）时，别给一张没有任何字的空卡
+            body.textContent = '（这份计划没有正文：模型提交时 body 是空的。点「否」退回，让它先 plan.write 把完整计划写完再提交。）';
+            text.append(title, body);
+        } else if (full.length > FOLD) {
             body.textContent = full.slice(0, FOLD) + '…';
             const more = document.createElement('button');
             more.className = 'sta-btn ghost sta-plan-more';
