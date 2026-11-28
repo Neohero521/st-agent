@@ -29,6 +29,7 @@ const MAX_RUNNING = 3;
 const SUB_TOOL_DENYLIST = new Set(['sub.spawn', 'sub.continue', 'plan.write', 'plan.submit', 'plan.reset', 'ui.reload']);
 
 const REG = (globalThis.__staSubs = globalThis.__staSubs || new Map());
+const MAX_OUT_ITEMS = 200;
 
 /** 生成串行化：所有子任务共用一个队列，一次只让一个请求打到模型 */
 let GEN_TAIL = Promise.resolve();
@@ -39,6 +40,13 @@ function withGenLock(fn) {
 }
 
 function nowMs() { return Date.now(); }
+
+/** 往作业的增量输出里追加一条（job.output 只返回自上次读取以来的部分，和 DSH 一样是消费式游标） */
+function pushOut(sub, item) {
+    if (!Array.isArray(sub.out)) sub.out = [];
+    sub.out.push(Object.assign({ t: nowMs() }, item));
+    if (sub.out.length > MAX_OUT_ITEMS) sub.out.splice(0, sub.out.length - MAX_OUT_ITEMS);
+}
 
 function runningCount() {
     let n = 0;
@@ -119,19 +127,17 @@ export function getSub(name) { return REG.get(String(name || '')) || null; }
 export function cancelSub(name) {
     const s = REG.get(String(name || ''));
     if (!s) return false;
-    if (s.status === 'running') {
-        s.status = 'cancelled';
-        s.endedAt = nowMs();
-        try { s.ctl.abort(); } catch { /* 已结束 */ }
-        return true;
-    }
-    return false;
+    if (s.status !== 'running') return false;
+    // 只请求取消：真正停下（本轮生成中断 / 循环检查点）之后，run 的收尾才把它结算成 cancelled
+    s.cancelRequested = true;
+    try { s.ctl.abort(); } catch { /* 已结束 */ }
+    return true;
 }
 
 async function loop(sub) {
     const messages = sub.messages;
     for (let step = sub.steps + 1; step <= MAX_STEPS; step++) {
-        if (sub.status === 'cancelled') return;
+        if (sub.status === 'cancelled' || sub.ctl.signal.aborted) return;
         sub.steps = step;
 
         // 父级若挂了 mockGenerate（自测 / 演示），子任务也跟着走 mock：同一套输出协议，便于端到端验证
@@ -139,17 +145,19 @@ async function loop(sub) {
             ? await withGenLock(() => generateOverride(messages))
             : (await withGenLock(() => streamChatCompletion(messages, { signal: sub.ctl.signal }))).text;
         const raw = String(text || '');
+        pushOut(sub, { kind: 'text', step, text: raw.slice(0, 800) + (raw.length > 800 ? '…' : '') });
         const calls = parseToolCalls(raw);
         const final = extractFinal(raw);
 
         if (!calls.length) {
             sub.result = String(final || raw).slice(0, MAX_RESULT_CHARS);
+            pushOut(sub, { kind: 'final', step, text: sub.result.slice(0, 1200) });
             return;
         }
 
         messages.push({ role: 'assistant', content: raw });
         for (const call of calls) {
-            if (sub.status === 'cancelled') return;
+            if (sub.status === 'cancelled' || sub.ctl.signal.aborted) return;
             if (SUB_TOOL_DENYLIST.has(call.name)) {
                 messages.push({ role: 'user', content: `<tool_result name="${call.name}" ok="false">这个工具在子任务里不可用（深度/职责限制）。把这件事的未决部分写进结论，交给父级。</tool_result>` });
                 continue;
@@ -158,12 +166,14 @@ async function loop(sub) {
             try {
                 // 写权限：默认只读。父级在 sub.spawn 里给 allowWrite:true 才算授权（那次调用本身走了批准）
                 if (!sub.allowWrite && riskOf(call) >= 2) {
+                    pushOut(sub, { kind: 'call', step, name: call.name, note: '被只读规则挡回' });
                     payload = JSON.stringify({ ok: false, blocked: true, error: `子任务默认只读：${call.name} 是写类工具，父级没给 allowWrite。把要写的东西记成清单写进结论，由父级来落地。` });
                     sub.toolsUsed++;
                     if (payload.length > MAX_TOOL_CHARS) payload = payload.slice(0, MAX_TOOL_CHARS);
                     messages.push({ role: 'user', content: `<tool_result name="${call.name}">${payload}</tool_result>` });
                     continue;
                 }
+                pushOut(sub, { kind: 'call', step, name: call.name });
                 const got = await executeTool(call);
                 payload = JSON.stringify(got);
                 sub.toolsUsed++;
@@ -176,6 +186,7 @@ async function loop(sub) {
         if (final && final.trim()) {
             // 模型自己收了尾：这条 final 已经说清了，直接结束，不再多跑一步
             sub.result = final.trim().slice(0, MAX_RESULT_CHARS);
+            pushOut(sub, { kind: 'final', step, text: sub.result.slice(0, 1200) });
             return;
         }
     }
@@ -188,9 +199,12 @@ async function run(sub) {
     try {
         if (runningCount() > MAX_RUNNING) throw new Error(`同时最多 ${MAX_RUNNING} 个子任务，先等一个结束`);
         await loop(sub);
-        if (sub.status === 'running') sub.status = 'done';
+        if (sub.status === 'running') {
+            sub.status = (sub.ctl.signal.aborted || sub.cancelRequested) ? 'cancelled' : 'done';
+        }
     } catch (e) {
-        if (sub.status !== 'cancelled') {
+        if (sub.ctl.signal.aborted || sub.cancelRequested) sub.status = 'cancelled';
+        else if (sub.status !== 'cancelled') {
             sub.status = 'failed';
             sub.error = String(e && e.message ? e.message : e);
         }
@@ -230,6 +244,8 @@ export async function spawnSub({ task, name, parentId, depth = 1, wait = true, r
         startedAt: 0,
         endedAt: 0,
         allowWrite: !!allowWrite,
+        out: [{ kind: 'text', step: 0, text: `开始：${text.slice(0, 300)}` }],
+        consumed: 0,
         ctl: new AbortController(),
         messages: resume && Array.isArray(resume.messages) && resume.messages.length
             ? [...resume.messages, { role: 'user', content: text }]
@@ -239,11 +255,12 @@ export async function spawnSub({ task, name, parentId, depth = 1, wait = true, r
     try { uiHooks.paintSub?.(); } catch { /* 无面板时忽略 */ }
 
     if (wait) {
-        await run(sub);
+        sub.promise = run(sub);
+        await sub.promise;
         return { mode: 'waited', sub };
     }
     // 后台跑：完全不阻塞调用方
-    run(sub).catch(() => { /* run 内部已兜底 */ });
+    sub.promise = run(sub).catch(() => { /* run 内部已兜底 */ });
     return { mode: 'started', sub };
 }
 
@@ -266,15 +283,18 @@ export async function continueSub({ name, instruction, wait = true }) {
         startedAt: 0,
         endedAt: 0,
         allowWrite: !!prev.allowWrite,
+        out: [{ kind: 'text', step: 0, text: `续跑：${String(instruction || '').slice(0, 300)}` }],
+        consumed: 0,
         ctl: new AbortController(),
         messages: [...prev.messages, { role: 'user', content: `续跑指令：${instruction || '继续把上次没做完的部分做完'}` }],
     };
     REG.set(key, sub);
     if (wait) {
-        await run(sub);
+        sub.promise = run(sub);
+        await sub.promise;
         return { mode: 'waited', sub };
     }
-    run(sub).catch(() => {});
+    sub.promise = run(sub).catch(() => {});
     return { mode: 'started', sub };
 }
 

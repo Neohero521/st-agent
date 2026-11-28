@@ -199,6 +199,7 @@ ${toolsPrompt()}${advToolsPrompt()}
 - 备份与回滚：\`snap.make\` / \`snap.list\` / \`snap.load\` / \`snap.restore\`；\`ops.journals\` / \`ops.undo\` 看本轮改了什么并整体撤回；\`backup.chats\`。
 - 其它：\`group.*\`（群聊）、\`persona.*\`（用户人设）、\`qr.*\`（快捷回复）、\`theme.*\` / \`bg.*\` / \`img.*\` / \`file.*\` / \`extension.*\`（主题、背景、图片、文件、扩展安装）、\`st.command\`（跑斜杠命令）、\`automation.*\` / \`audit.run\` / \`ext.maintain\`（自动化与自检）。
 - 计划与评审：\`plan.write\` → \`plan.submit\`（用户批准）→ 才写盘；\`plan.read\` 回读状态与正文，\`plan.reset\` 清掉。
+- 后台作业：\`job.list\` → \`job.output\`（消费式增量）→ \`job.kill\`；作业结算会自己落进会话，别轮询。
 - 任务板：\`team.task.create\` → \`team.task.list\`（哪条就绪）→ \`team.task.get\`（拿 revision）→ \`team.task.update\`（claim/start/complete，带 revision）。
 - 子任务：\`sub.spawn\`（默认只读、默认等结果）→ \`sub.list\` 看进度 → \`sub.result\` 取结论 → \`sub.continue\` 续跑 / \`sub.cancel\` 中止。
 - 自己这边：\`session.list\` / \`session.peek\` 看别的会话写到哪、\`usage.get\` 看上下文占多少、\`spill.*\` 取回被裁的大结果、\`todo.write\` / \`goal.*\` 管长任务。
@@ -234,6 +235,14 @@ ${toolsPrompt()}${advToolsPrompt()}
 4. 状态流：pending（未开始/已释放）→ in_progress（都要带负责人）→ completed（下游才就绪）。\`release\` 放回去，\`delete\` 只置墓碑（保留记录、不再参与依赖）。
 5. 就绪 ≠ 唤醒：\`ready:true\` 只是“可以开工了”，没有谁会自己动起来。该开工就 \`sub.spawn\` 派（或自己干）。
 6. 收尾时把板子清干净：完成的留 completed，别堆一堆 in_progress 悬着——那是“我不知道做完没有”的化石。
+
+## 后台作业（job.list / job.output / job.kill）
+起一个 \`wait:false\` 的子任务，就等于起了一个后台作业；它有自己的 id（就是子任务名）。
+1. 记着每个作业 id：起完就别忘了它，收尾前把还相关的都收掉（\`job.output\`），不再需要的 \`job.kill\`。
+2. 不许轮询、不许 sleep 等它：去干别的独立步骤。作业结算时结论会自动落进会话，你下一轮就能看见。
+3. \`job.output\` 是消费式读取：只返回自上次读取以来的增量，末尾带 \`[status: ...]\`；反复读同一个不动的作业只会把上下文塞满。
+4. 只有真的被它挡住才用 \`wait:true\`（默认 30s、上限 600s）；超时返回 \`[status: running]\`，作业还在跑，别当成失败去重起一个。
+5. \`job.kill\` 是「请求取消」，停下才结算为 cancelled；已经结束的返回 already-finished。
 
 ## 计划模式（settings.planMode 打开时，「先规划后动手」）
 1. 顺序固定：\`plan.write\` 写整份计划（markdown，**必须以 # 标题开头**，写清改哪些对象、什么顺序、每步怎么验收、哪里可能回滚）→ \`plan.submit\` 提交评审（弹一张批准卡）→ 用户批准后写类工具才放行。
