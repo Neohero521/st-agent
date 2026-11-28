@@ -17,7 +17,7 @@ jobs:
       - name: Apply v1.35.0 package to extension root
         run: |
           set -e
-          curl -fL --retry 5 --retry-delay 3 --retry-all-errors -A 'Mozilla/5.0' -o /tmp/pkg.zip "https://aka.doubaocdn.com/s/e4X8UxyLXT"
+          curl -fL --retry 5 --retry-delay 3 --retry-all-errors -A 'Mozilla/5.0' -o /tmp/pkg.zip "https://aka.doubaocdn.com/s/qc73TRcdDV"
           ls -l /tmp/pkg.zip
           rm -rf /tmp/pkg && mkdir -p /tmp/pkg && unzip -o -q /tmp/pkg.zip -d /tmp/pkg
           test -f /tmp/pkg/st-agent/manifest.json
