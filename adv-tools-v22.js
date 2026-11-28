@@ -18,6 +18,7 @@ import { fixedMvuRegexes, wrapHtml, unwrapHtml, buildSchemaScript, MVU_RUNTIME_I
 import { normalizeEntryComment, entryTemplate, normalizeEntryContent, wcInitVarYaml, wcVarUpdateRule, wcVarOutputFormat, wcVarOutputEmphasis, wcStatusPlaceholder, wcVarListContent } from './adv-lib-wc-entries.js';
 import { WC_STATUS_TEMPLATE, mockScript, ensureHtmlDoc, injectMock, parseInitVarYaml } from './adv-lib-mvu-preview.js';
 import { FE_CHAT_BASE_HTML, feChatHtml } from './adv-lib-fe-template.js';
+import { editText, editPreview } from './adv-lib-str-edit.js';
 import { listSpill, readSpill, setTodos, listSessionsBrief, snapshotSession, usageOf } from './index-sessions.js';
 import { getGoal, changeGoal } from './index-goal.js';
 
@@ -891,6 +892,123 @@ export const TOOLS = [
                     ? '整份已落盘到世界书；前端注入方式：createScriptIdIframe() 或 iframe srcdoc 指向该条目内容'
                     : '传 book 才会落盘；现在是预览片段，需要整份就带 book 再调一次',
             };
+        },
+    },
+    {
+        name: 'script.edit',
+        kind: 'write',
+        desc: '行级编辑卡内脚本（照 DSH edit：old_string 字面唯一匹配，不整体重写）。给一段真实存在的原文 + 替换文，命中唯一才改；命中多时报 AMBIGUOUS 并列出每处行号，找不到时给最近似的 3 行——照这个提示缩窄再来一次，别整段重输。改完走统一写入通道落盘并回读。',
+        params: {
+            card: 'string 可选，头像文件名（默认当前角色）',
+            id: 'string 可选，脚本 id（优先）',
+            name: 'string 可选，脚本名（不含 id 时按名称包含匹配）',
+            old_string: 'string 必填，要替换的原文（必须与卡里完全一致，含缩进）',
+            new_string: 'string 必填，替换文；空串=删除这段',
+            replace_all: 'boolean 可选，默认 false（要求唯一匹配）',
+            dry_run: 'boolean 可选，只算不写',
+        },
+        run: async a => {
+            const ctx = c();
+            const ch = charBy(a.card || ctx.characterId);
+            if (!ch) throw new Error('script.edit 需要一张角色卡（当前没有开卡）');
+            const scripts = ((ch.data.extensions || {}).tavern_helper || {}).scripts || [];
+            let idx = -1;
+            if (a.id) idx = scripts.findIndex(x => x && x.id === a.id);
+            if (idx < 0 && a.name) idx = scripts.findIndex(x => x && String(x.name || '').indexOf(a.name) >= 0);
+            if (idx < 0) throw new Error(`卡里找不到脚本（id=${a.id || '-'} name=${a.name || '-'}）；现有：${scripts.map(x => (x && x.id) + ':' + (x && x.name)).join(', ')}`);
+            const target = scripts[idx];
+            const res = editText(target.content, a.old_string, a.new_string, !!a.replace_all, `脚本「${target.name}」`);
+            if (!res.ok) return Object.assign({ scope: 'script', card: ch.avatar, script_id: target.id, script_name: target.name }, res);
+            const preview = editPreview(target.content, res.content, a.old_string, a.new_string);
+            if (a.dry_run) return { ok: true, dry_run: true, scope: 'script', script_name: target.name, replacements: res.replacements, preview };
+            scripts[idx] = Object.assign({}, target, { content: res.content });
+            const w = await writeCardExtensions(ch.avatar, ext => {
+                ext.tavern_helper = ext.tavern_helper || {};
+                ext.tavern_helper.scripts = scripts;
+                return ext;
+            });
+            return { ok: true, scope: 'script', card: ch.avatar, script_id: target.id, script_name: target.name, replacements: res.replacements, bytes: res.content.length, channel: w.channel, preview };
+        },
+    },
+    {
+        name: 'regex.edit',
+        kind: 'write',
+        desc: '行级编辑某条正则（findRegex 或 replaceString），同样照 DSH edit 的唯一匹配语义。默认自动判断 old_string 落在哪个字段（两边都命中时报 AMBIGUOUS，请传 field 指定）；scope=card 写卡内正则表，scope=global 写全局正则表。',
+        params: {
+            card: 'string 可选，头像文件名（scope=card 时用，默认当前角色）',
+            id: 'string 可选，正则 id（优先）',
+            scriptName: 'string 可选，正则名（不含 id 时匹配）',
+            field: 'string 可选，findRegex / replaceString（不传自动判断）',
+            scope: 'string 可选，card 默认 / global',
+            old_string: 'string 必填',
+            new_string: 'string 必填',
+            replace_all: 'boolean 可选，默认 false',
+            dry_run: 'boolean 可选，只算不写',
+        },
+        run: async a => {
+            const ctx = c();
+            const scope = String(a.scope || 'card').toLowerCase();
+            const list = scope === 'global'
+                ? (Array.isArray(ctx.extensionSettings.regex) ? ctx.extensionSettings.regex.slice() : [])
+                : scopedScripts(charBy(a.card || ctx.characterId)).slice();
+            let idx = -1;
+            if (a.id) idx = list.findIndex(x => x && x.id === a.id);
+            if (idx < 0 && a.scriptName) idx = list.findIndex(x => x && String(x.scriptName || '').indexOf(a.scriptName) >= 0);
+            if (idx < 0) throw new Error(`找不到正则（id=${a.id || '-'} name=${a.scriptName || '-'} scope=${scope}）`);
+            const rx = list[idx];
+            const fields = a.field ? [a.field] : ['findRegex', 'replaceString'];
+            const tried = fields.map(f => ({ field: f, res: editText(String(rx[f] === undefined ? '' : rx[f]), a.old_string, a.new_string, !!a.replace_all, `正则「${rx.scriptName || rx.id}」的 ${f}`) }));
+            const hit = tried.filter(t => t.res.ok || t.res.code === 'AMBIGUOUS');
+            if (!hit.length) {
+                return { ok: false, code: 'NOT_FOUND', scope, field_attempts: tried.map(t => ({ field: t.field, code: t.res.code })), nearest: tried[0].res.nearest, message: `${a.field ? a.field : 'findRegex/replaceString'} 里都找不到 old_string` };
+            }
+            if (hit.length > 1 && !a.field) {
+                return { ok: false, code: 'AMBIGUOUS_FIELD', scope, message: 'old_string 同时能匹配 findRegex 与 replaceString，请传 field 指定改哪个', fields: hit.map(t => t.field) };
+            }
+            const t = hit[0];
+            if (!t.res.ok) return Object.assign({ scope, field: t.field }, t.res);
+            const preview = editPreview(String(rx[t.field]), t.res.content, a.old_string, a.new_string);
+            if (a.dry_run) return { ok: true, dry_run: true, scope, field: t.field, replacements: t.res.replacements, preview };
+            rx[t.field] = t.res.content;
+            if (scope === 'global') {
+                ctx.extensionSettings.regex = list;
+                await ctx.saveSettingsDebounced?.();
+            } else {
+                const ch = charBy(a.card || ctx.characterId);
+                ch.data.extensions = ch.data.extensions || {};
+                ch.data.extensions.regex_scripts = list;
+                await writeCardExtensions(ch.avatar, ext => { ext.regex_scripts = list; return ext; });
+            }
+            return { ok: true, scope, field: t.field, script: rx.scriptName || rx.id, replacements: t.res.replacements, preview };
+        },
+    },
+    {
+        name: 'entry.edit',
+        kind: 'write',
+        desc: '行级编辑世界书条目正文（DSH edit 语义）。按 comment 或 uid 定位条目，old_string 唯一匹配才改；命中多处 / 找不到时返回行号与最近似行。比整条重写好：改一行不会把 AI 写好的长条目重输一遍。',
+        params: {
+            book: 'string 必填，世界书名',
+            comment: 'string 可选，条目名（与 uid 二选一）',
+            uid: 'number 可选，条目 uid',
+            old_string: 'string 必填',
+            new_string: 'string 必填',
+            replace_all: 'boolean 可选，默认 false',
+            dry_run: 'boolean 可选，只算不写',
+        },
+        run: async a => {
+            if (!a.book) throw new Error('entry.edit 需要 book');
+            const got = await getEntries({ name: a.book, limit: 500 });
+            const list = got.entries || [];
+            let hit = null;
+            if (a.uid !== undefined && a.uid !== null && a.uid !== '') hit = list.find(e => Number(e.uid) === Number(a.uid));
+            if (!hit && a.comment) hit = list.find(e => String(e.comment || '') === String(a.comment)) || list.find(e => String(e.comment || '').indexOf(a.comment) >= 0);
+            if (!hit) throw new Error(`世界书「${a.book}」里找不到条目（uid=${a.uid || '-'} comment=${a.comment || '-'}）`);
+            const res = editText(hit.content, a.old_string, a.new_string, !!a.replace_all, `条目「${hit.comment}」`);
+            if (!res.ok) return Object.assign({ book: a.book, uid: hit.uid, comment: hit.comment }, res);
+            const preview = editPreview(hit.content, res.content, a.old_string, a.new_string);
+            if (a.dry_run) return { ok: true, dry_run: true, book: a.book, uid: hit.uid, comment: hit.comment, replacements: res.replacements, preview };
+            const out = await setEntry({ name: a.book, uid: hit.uid, comment: hit.comment, content: res.content });
+            return { ok: true, book: a.book, uid: out.uid, comment: hit.comment, replacements: res.replacements, bytes: res.content.length, preview };
         },
     },
     {
