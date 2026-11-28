@@ -567,6 +567,8 @@ export function getActiveSession() {
  * 提及另一个会话，取它的一段「有界只读快照」进上下文——不是把整段历史搬进来。
  * 上限刻意压得小：快照是用来接上「上次写到哪」，不是用来重放。
  */
+export function allSessions() { return sessions; }
+
 export function listSessionsBrief() {
     return sessions.map(s => ({
         id: s.id,

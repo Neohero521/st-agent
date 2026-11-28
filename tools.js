@@ -45,7 +45,8 @@ import { TOOLS as TOOLS_PLAN } from './tools-plan.js';
 import { TOOLS as TOOLS_SUB } from './tools-sub.js';
 import { TOOLS as TOOLS_TEAM } from './tools-team.js';
 import { TOOLS as TOOLS_JOBS } from './tools-jobs.js';
+import { TOOLS as TOOLS_SEARCH } from './tools-search.js';
 
-for (const group of [TOOLS_V14, TOOLS_V15, TOOLS_V16, TOOLS_V17, TOOLS_V18, TOOLS_V19, TOOLS_V20, TOOLS_V21, TOOLS_V22, TOOLS_KIT, TOOLS_PLAN, TOOLS_SUB, TOOLS_TEAM, TOOLS_JOBS]) {
+for (const group of [TOOLS_V14, TOOLS_V15, TOOLS_V16, TOOLS_V17, TOOLS_V18, TOOLS_V19, TOOLS_V20, TOOLS_V21, TOOLS_V22, TOOLS_KIT, TOOLS_PLAN, TOOLS_SUB, TOOLS_TEAM, TOOLS_JOBS, TOOLS_SEARCH]) {
     if (Array.isArray(group)) ADV_TOOLS.push(...group);
 }

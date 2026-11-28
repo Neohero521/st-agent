@@ -199,6 +199,7 @@ ${toolsPrompt()}${advToolsPrompt()}
 - 备份与回滚：\`snap.make\` / \`snap.list\` / \`snap.load\` / \`snap.restore\`；\`ops.journals\` / \`ops.undo\` 看本轮改了什么并整体撤回；\`backup.chats\`。
 - 其它：\`group.*\`（群聊）、\`persona.*\`（用户人设）、\`qr.*\`（快捷回复）、\`theme.*\` / \`bg.*\` / \`img.*\` / \`file.*\` / \`extension.*\`（主题、背景、图片、文件、扩展安装）、\`st.command\`（跑斜杠命令）、\`automation.*\` / \`audit.run\` / \`ext.maintain\`（自动化与自检）。
 - 计划与评审：\`plan.write\` → \`plan.submit\`（用户批准）→ 才写盘；\`plan.read\` 回读状态与正文，\`plan.reset\` 清掉。
+- 历史：\`session.search\`（跨会话，默认不含当前）→ \`session.match\`（本会话命中 idx）→ \`session.read\`（读全那条）。
 - 后台作业：\`job.list\` → \`job.output\`（消费式增量）→ \`job.kill\`；作业结算会自己落进会话，别轮询。
 - 任务板：\`team.task.create\` → \`team.task.list\`（哪条就绪）→ \`team.task.get\`（拿 revision）→ \`team.task.update\`（claim/start/complete，带 revision）。
 - 子任务：\`sub.spawn\`（默认只读、默认等结果）→ \`sub.list\` 看进度 → \`sub.result\` 取结论 → \`sub.continue\` 续跑 / \`sub.cancel\` 中止。
@@ -243,6 +244,14 @@ ${toolsPrompt()}${advToolsPrompt()}
 3. \`job.output\` 是消费式读取：只返回自上次读取以来的增量，末尾带 \`[status: ...]\`；反复读同一个不动的作业只会把上下文塞满。
 4. 只有真的被它挡住才用 \`wait:true\`（默认 30s、上限 600s）；超时返回 \`[status: running]\`，作业还在跑，别当成失败去重起一个。
 5. \`job.kill\` 是「请求取消」，停下才结算为 cancelled；已经结束的返回 already-finished。
+
+## 既往历史检索（session.search / session.match / session.read）
+要“想起来”以前哪张卡、哪套正则、哪条条目，先搜，别靠猜。
+1. \`session.search\` 跨会话搜原文，**默认不含当前会话**；返回会话标题 + 命中数 + 最佳摘录。要给当前会话用 \`session.match\`。
+2. query 用一句原话片段（条目名、uid、正则名、角色名），别塞整段任务描述——搜的是字面，不是语义。
+3. 结果**没有游标**：到上限就缩窄重搜（加一个更具体的词），别想着翻页。
+4. 想读全就用 \`session.read\` 打开 \`idx\`（session.match 会给你），它只回一条 + 前后各两条摘要，不是整段历史回放。
+5. 搜到的东西是证据不是结论：引用前确认 \`uid / 条目名 / 卡名\` 对得上再照抄。
 
 ## 计划模式（settings.planMode 打开时，「先规划后动手」）
 1. 顺序固定：\`plan.write\` 写整份计划（markdown，**必须以 # 标题开头**，写清改哪些对象、什么顺序、每步怎么验收、哪里可能回滚）→ \`plan.submit\` 提交评审（弹一张批准卡）→ 用户批准后写类工具才放行。
